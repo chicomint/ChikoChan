@@ -3,7 +3,8 @@
 ChikoChan is a really simple lightweight Imagebord, raw html, built with Node.js
 >only Single board,
 >,the db system will keep on the (posts.json)
->,custom everything on server.js and style.css 
+>,custom everything on server.js and style.css
+<br>
 ## Requirements
 
 - Node.js

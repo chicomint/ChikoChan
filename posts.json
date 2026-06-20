@@ -1,0 +1,17 @@
+{
+  "lastId": 1,
+  "threads": [
+    {
+      "id": 1,
+      "name": "chicomint",
+      "title": "This is all start,",
+      "comment": "ChikoChan is a really simple Imagebord, raw html\r\n>only have one bord can't be add more\r\n>the db system will keep on the (posts.json)\r\n>custom everything on server.js and style.css \r\n\r\nThank you for using<3 (chicomint)",
+      "createdAt": 1781923458942,
+      "bumpedAt": 1781923458942,
+      "image": "src/1781923458935-491345423.png",
+      "imageName": "chikki.png",
+      "imageSize": "2.29 KB",
+      "replies": []
+    }
+  ]
+}

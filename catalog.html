@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Catalog - ChikoChan</title>
+  <link rel="icon" href="/chikki.ico" type="image/x-icon">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  
+  <nav class="board-list" aria-label="board navigation">
+    <span class="board-index">[ <a href="/">/chiko/</a> / <strong>catalog</strong> / <a href="/#post-form">post</a> ] [ <span>1 thread · 0 replies</span> ]</span>
+    <a class="home-link" href="/">[Home]</a>
+  </nav>
+  
+  <header>
+    <h1>/chiko/ - ChikoChan</h1>
+    <p>Welcome to ChikoChan, (off topic) Talk about any! ,no nsfw</p>
+  </header>
+  <main class="catalog-container">
+    <div class="catalog-header-row">
+      <h2>Catalog</h2>
+      <span>1 thread · 0 replies</span>
+    </div>
+    
+    <div class="catalog-grid">
+      
+    <article class="catalog-card">
+      <a class="catalog-thumb-link" href="/thread/1" title="Open thread No.1">
+        <img class="catalog-thumb" src="/src/1781923458935-491345423.png" alt="chikki.png">
+      </a>
+      <div class="catalog-card-meta">
+        <a class="catalog-post-id" href="/thread/1">No.1</a>
+        <span>0 replies</span>
+      </div>
+      <a class="catalog-subject" href="/thread/1">This is all start,</a>
+      <div class="catalog-name">chicomint</div>
+      <div class="catalog-date">26/06/20(Sat)09:44:18</div>
+      <p class="catalog-preview"><a href="/thread/1">ChikoChan is a really simple Imagebord, raw html &gt;only have one bord can&#39;t be add more &gt;the db system will keep on the (posts.json) &gt;custom everything...</a></p>
+    </article>
+  
+    </div>
+  
+  </main>
+  
+  <script>
+    function quotePost(postId, threadId) {
+      const details = document.getElementById('reply-form-' + threadId);
+      if (details && details.tagName.toLowerCase() === 'details') {
+        details.open = true;
+      }
+
+      const textarea = document.getElementById('reply-comment-' + threadId);
+      if (!textarea) return true;
+
+      const quoteText = '>>' + postId + '\n';
+      if (textarea.value && !textarea.value.endsWith('\n')) {
+        textarea.value += '\n';
+      }
+      textarea.value += quoteText;
+      textarea.focus();
+      location.hash = 'reply-form-' + threadId;
+      return false;
+    }
+
+    document.addEventListener('click', function(event) {
+      const link = event.target.closest('[data-quote-id][data-thread-id]');
+      if (!link) return;
+      if (quotePost(link.dataset.quoteId, link.dataset.threadId) === false) {
+        event.preventDefault();
+      }
+    });
+
+    document.addEventListener('DOMContentLoaded', function() {
+      const params = new URLSearchParams(window.location.search);
+      const quoteId = params.get('quote');
+      const threadId = document.body.dataset.threadId;
+      if (quoteId && threadId) {
+        quotePost(quoteId, threadId);
+      }
+    });
+  </script>
+</body>
+</html>

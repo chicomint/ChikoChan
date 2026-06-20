@@ -10,11 +10,16 @@ const BOARD_PATH = '/chiko/';
 const BOARD_TITLE = 'ChikoChan';
 const BOARD_DESCRIPTION = 'Welcome to ChikoChan, (off topic) Talk about any! ,no nsfw';
 
-const DATA_FILE = path.join(__dirname, 'posts.json');
+const DATA_DIR = process.env.DATA_DIR || __dirname;
+const DATA_FILE = path.join(DATA_DIR, 'posts.json');
 const HTML_FILE = path.join(__dirname, 'index.html');
 const CATALOG_FILE = path.join(__dirname, 'catalog.html');
-const UPLOAD_DIR = path.join(__dirname, 'src');
+const UPLOAD_DIR = path.join(DATA_DIR, 'src');
 const FAVICON_FILE = path.join(__dirname, 'chikki.ico');
+
+if (!fs.existsSync(DATA_DIR)) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+}
 
 if (!fs.existsSync(UPLOAD_DIR)) {
   fs.mkdirSync(UPLOAD_DIR, { recursive: true });

@@ -1,4 +1,5 @@
-<img src="chikki.ico"># ChikoChan
+<img src="chikki.ico"   width="15" 
+     height="15" ># ChikoChan
 ChikoChan is a really simple lightweight Imagebord, raw html, built with Node.js
 >only Single board
 >the db system will keep on the (posts.json)

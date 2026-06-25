@@ -28,9 +28,16 @@ const DUPLICATE_REPLY_LOOKBACK = 20;
 const POST_RATE_WINDOW_MS = Number(process.env.POST_RATE_WINDOW_MS) || 60 * 1000;
 const POST_RATE_LIMIT = Number(process.env.POST_RATE_LIMIT) || 5;
 const POST_RATE_BUCKET_MAX = 1000;
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
+const ADMIN_SESSION_SECRET = process.env.ADMIN_SESSION_SECRET || ADMIN_PASSWORD;
+const ADMIN_COOKIE_NAME = 'chikochan_admin';
+const ADMIN_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+const ADMIN_LOGIN_WINDOW_MS = 5 * 60 * 1000;
+const ADMIN_LOGIN_LIMIT = 5;
 const ALLOWED_IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp']);
 const UPLOAD_FILE_PATTERN = /^\d+-(?:\d+|[a-f0-9]{16})\.(?:jpe?g|png|gif|webp)$/i;
 const postRateBuckets = new Map();
+const adminLoginBuckets = new Map();
 
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -279,6 +286,206 @@ function assertNotDuplicateReply(thread, comment) {
   if (duplicateCount >= 2) {
     throw new Error('Duplicate reply detected. Please do not post the same message repeatedly.');
   }
+}
+
+function isAdminConfigured() {
+  return Boolean(ADMIN_PASSWORD && ADMIN_SESSION_SECRET);
+}
+
+function timingSafeEqualStrings(a, b) {
+  const aBuffer = Buffer.from(String(a || ''));
+  const bBuffer = Buffer.from(String(b || ''));
+
+  if (aBuffer.length !== bBuffer.length) {
+    return false;
+  }
+
+  return crypto.timingSafeEqual(aBuffer, bBuffer);
+}
+
+function parseCookies(req) {
+  const header = req.headers.cookie || '';
+  const cookies = {};
+
+  header.split(';').forEach(part => {
+    const index = part.indexOf('=');
+    if (index === -1) return;
+
+    const key = part.slice(0, index).trim();
+    const value = part.slice(index + 1).trim();
+    if (!key) return;
+
+    try {
+      cookies[key] = decodeURIComponent(value);
+    } catch (err) {
+      cookies[key] = '';
+    }
+  });
+
+  return cookies;
+}
+
+function signAdminValue(value) {
+  return crypto
+    .createHmac('sha256', ADMIN_SESSION_SECRET)
+    .update(value)
+    .digest('base64url');
+}
+
+function createAdminSessionToken() {
+  const payload = {
+    exp: Date.now() + ADMIN_SESSION_TTL_MS,
+    nonce: crypto.randomBytes(18).toString('base64url')
+  };
+  const encoded = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  return `${encoded}.${signAdminValue(encoded)}`;
+}
+
+function readAdminSession(req) {
+  if (!isAdminConfigured()) return null;
+
+  const token = parseCookies(req)[ADMIN_COOKIE_NAME];
+  if (!token) return null;
+
+  const parts = token.split('.');
+  if (parts.length !== 2) return null;
+
+  const [encoded, signature] = parts;
+  if (!timingSafeEqualStrings(signAdminValue(encoded), signature)) {
+    return null;
+  }
+
+  try {
+    const payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
+    if (!payload.exp || Date.now() > Number(payload.exp)) {
+      return null;
+    }
+
+    if (!payload.nonce) {
+      return null;
+    }
+
+    return payload;
+  } catch (err) {
+    return null;
+  }
+}
+
+function adminCsrfToken(session) {
+  return crypto
+    .createHmac('sha256', ADMIN_SESSION_SECRET)
+    .update(`csrf:${session.nonce}`)
+    .digest('base64url');
+}
+
+function isSecureRequest(req) {
+  return req.secure || req.headers['x-forwarded-proto'] === 'https' || process.env.NODE_ENV === 'production';
+}
+
+function setAdminCookie(req, res, token) {
+  const parts = [
+    `${ADMIN_COOKIE_NAME}=${encodeURIComponent(token)}`,
+    'Path=/admin',
+    'HttpOnly',
+    'SameSite=Strict',
+    `Max-Age=${Math.floor(ADMIN_SESSION_TTL_MS / 1000)}`
+  ];
+
+  if (isSecureRequest(req)) {
+    parts.push('Secure');
+  }
+
+  res.setHeader('Set-Cookie', parts.join('; '));
+}
+
+function clearAdminCookie(req, res) {
+  const parts = [
+    `${ADMIN_COOKIE_NAME}=`,
+    'Path=/admin',
+    'HttpOnly',
+    'SameSite=Strict',
+    'Max-Age=0'
+  ];
+
+  if (isSecureRequest(req)) {
+    parts.push('Secure');
+  }
+
+  res.setHeader('Set-Cookie', parts.join('; '));
+}
+
+function requireAdmin(req, res, next) {
+  if (!isAdminConfigured()) {
+    res.status(404).send('Not found');
+    return;
+  }
+
+  const session = readAdminSession(req);
+  if (!session) {
+    res.redirect('/admin/login');
+    return;
+  }
+
+  req.adminSession = session;
+  res.setHeader('Cache-Control', 'no-store');
+  next();
+}
+
+function requireAdminCsrf(req) {
+  const expected = adminCsrfToken(req.adminSession);
+  const provided = String(req.body.csrf || '');
+
+  if (!timingSafeEqualStrings(expected, provided)) {
+    const err = new Error('Invalid admin form token.');
+    err.status = 403;
+    throw err;
+  }
+}
+
+function checkAdminLoginRate(req) {
+  const now = Date.now();
+  const key = getClientKey(req);
+  const current = adminLoginBuckets.get(key);
+  const bucket = current && now - current.windowStart < ADMIN_LOGIN_WINDOW_MS
+    ? current
+    : { windowStart: now, count: 0 };
+
+  if (bucket.count >= ADMIN_LOGIN_LIMIT) {
+    const err = new Error('Too many admin login attempts. Try again later.');
+    err.status = 429;
+    throw err;
+  }
+
+  bucket.count += 1;
+  adminLoginBuckets.set(key, bucket);
+}
+
+function clearAdminLoginRate(req) {
+  adminLoginBuckets.delete(getClientKey(req));
+}
+
+function uploadPathFromPost(post) {
+  const image = String(post?.image || '');
+  if (!image.startsWith('src/')) return null;
+
+  const filename = image.slice('src/'.length);
+  if (!UPLOAD_FILE_PATTERN.test(filename)) return null;
+
+  return path.join(UPLOAD_DIR, filename);
+}
+
+function deletePostUpload(post) {
+  const filePath = uploadPathFromPost(post);
+  if (filePath) {
+    safeUnlink(filePath);
+  }
+}
+
+function recalculateThreadBump(thread) {
+  const replyTimes = Array.isArray(thread.replies)
+    ? thread.replies.map(reply => Number(reply.createdAt) || 0)
+    : [];
+  thread.bumpedAt = Math.max(Number(thread.createdAt) || Date.now(), ...replyTimes);
 }
 
 function loadPosts() {
@@ -688,6 +895,243 @@ function generateThreadPageHTML(threadId) {
     { threadId: thread.id }
   );
 }
+
+function adminShell(title, bodyHTML) {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${escapeHTML(title)}</title>
+  <link rel="icon" href="/chikki.ico" type="image/x-icon">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main class="admin-page">
+    ${bodyHTML}
+  </main>
+</body>
+</html>`;
+}
+
+function adminLoginHTML(errorMessage = '') {
+  return adminShell(`Admin - ${BOARD_TITLE}`, `
+    <section class="admin-panel admin-login-panel">
+      <h1>Admin</h1>
+      ${errorMessage ? `<p class="admin-error">${escapeHTML(errorMessage)}</p>` : ''}
+      <form action="/admin/login" method="POST">
+        <label for="admin-password">Password</label>
+        <input type="password" id="admin-password" name="password" autocomplete="current-password" autofocus required>
+        <button type="submit">Log in</button>
+      </form>
+      <p class="admin-muted">[ <a href="/">Return to board</a> ]</p>
+    </section>
+  `);
+}
+
+function csrfField(csrfToken) {
+  return `<input type="hidden" name="csrf" value="${escapeHTML(csrfToken)}">`;
+}
+
+function adminPostSummary(post) {
+  const name = escapeHTML(cleanText(post.name, 'Anonymous'));
+  const title = escapeHTML(cleanText(post.title));
+  const comment = escapeHTML(previewText(post.comment, 220));
+  const imageName = post.imageName ? `<span>File: ${escapeHTML(post.imageName)}</span>` : '';
+
+  return `
+    <div class="admin-post-summary">
+      <div>
+        ${title ? `<strong>${title}</strong>` : '<strong>No subject</strong>'}
+        <span class="admin-muted">by ${name} · ${formatDate(post.createdAt)}</span>
+      </div>
+      <p>${comment}</p>
+      ${imageName}
+    </div>
+  `;
+}
+
+function adminReplyHTML(reply, threadId, csrfToken) {
+  const name = escapeHTML(cleanText(reply.name, 'Anonymous'));
+  const comment = escapeHTML(previewText(reply.comment, 180));
+
+  return `
+    <li class="admin-reply">
+      <div>
+        <strong>No.${reply.id}</strong>
+        <span class="admin-muted">by ${name} · ${formatDate(reply.createdAt)}</span>
+        <p>${comment}</p>
+      </div>
+      <form action="/admin/delete-reply" method="POST" class="admin-action-form">
+        ${csrfField(csrfToken)}
+        <input type="hidden" name="threadId" value="${threadId}">
+        <input type="hidden" name="replyId" value="${reply.id}">
+        <button type="submit" class="danger-button">Delete reply</button>
+      </form>
+    </li>
+  `;
+}
+
+function adminThreadHTML(thread, csrfToken) {
+  const replies = Array.isArray(thread.replies) ? thread.replies : [];
+
+  return `
+    <article class="admin-thread">
+      <div class="admin-thread-header">
+        <div>
+          <h2>No.${thread.id}</h2>
+          <span class="admin-muted">${replies.length} repl${replies.length === 1 ? 'y' : 'ies'}</span>
+        </div>
+        <form action="/admin/delete-thread" method="POST" class="admin-action-form admin-delete-thread-form">
+          ${csrfField(csrfToken)}
+          <input type="hidden" name="threadId" value="${thread.id}">
+          <label><input type="checkbox" name="confirm" value="yes" required> confirm</label>
+          <button type="submit" class="danger-button">Delete thread</button>
+        </form>
+      </div>
+      ${adminPostSummary(thread)}
+      ${replies.length ? `<ol class="admin-reply-list">${replies.map(reply => adminReplyHTML(reply, thread.id, csrfToken)).join('')}</ol>` : '<p class="admin-muted">No replies.</p>'}
+    </article>
+  `;
+}
+
+function adminDashboardHTML(session) {
+  const threads = getSortedThreads();
+  const stats = getBoardStats(threads);
+  const csrfToken = adminCsrfToken(session);
+
+  return adminShell(`Admin - ${BOARD_TITLE}`, `
+    <section class="admin-panel">
+      <div class="admin-toolbar">
+        <div>
+          <h1>Admin</h1>
+          <p>${escapeHTML(stats.line)}</p>
+        </div>
+        <div class="admin-toolbar-actions">
+          <a href="/">Board</a>
+          <form action="/admin/logout" method="POST">
+            ${csrfField(csrfToken)}
+            <button type="submit">Log out</button>
+          </form>
+        </div>
+      </div>
+      ${threads.length ? threads.map(thread => adminThreadHTML(thread, csrfToken)).join('') : '<p class="admin-muted">No threads.</p>'}
+    </section>
+  `);
+}
+
+app.get('/admin/login', (req, res) => {
+  if (!isAdminConfigured()) {
+    res.status(404).send('Not found');
+    return;
+  }
+
+  if (readAdminSession(req)) {
+    res.redirect('/admin');
+    return;
+  }
+
+  res.setHeader('Cache-Control', 'no-store');
+  res.send(adminLoginHTML());
+});
+
+app.post('/admin/login', (req, res, next) => {
+  try {
+    if (!isAdminConfigured()) {
+      res.status(404).send('Not found');
+      return;
+    }
+
+    checkAdminLoginRate(req);
+
+    if (!timingSafeEqualStrings(req.body.password, ADMIN_PASSWORD)) {
+      res.status(401);
+      res.setHeader('Cache-Control', 'no-store');
+      res.send(adminLoginHTML('Wrong password.'));
+      return;
+    }
+
+    clearAdminLoginRate(req);
+    setAdminCookie(req, res, createAdminSessionToken());
+    res.redirect('/admin');
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/admin/logout', requireAdmin, (req, res, next) => {
+  try {
+    requireAdminCsrf(req);
+    clearAdminCookie(req, res);
+    res.redirect('/admin/login');
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get('/admin', requireAdmin, (req, res) => {
+  res.send(adminDashboardHTML(req.adminSession));
+});
+
+app.post('/admin/delete-thread', requireAdmin, (req, res, next) => {
+  try {
+    requireAdminCsrf(req);
+
+    if (req.body.confirm !== 'yes') {
+      throw new Error('Thread delete requires confirmation.');
+    }
+
+    const threadId = parseInt(req.body.threadId, 10);
+    const data = loadPosts();
+    const threadIndex = data.threads.findIndex(item => item.id === threadId);
+
+    if (threadIndex === -1) {
+      throw new Error('Thread not found.');
+    }
+
+    const [thread] = data.threads.splice(threadIndex, 1);
+    deletePostUpload(thread);
+    (thread.replies || []).forEach(deletePostUpload);
+
+    savePosts(data);
+    generateHTML();
+    generateCatalogHTML();
+    res.redirect('/admin');
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post('/admin/delete-reply', requireAdmin, (req, res, next) => {
+  try {
+    requireAdminCsrf(req);
+
+    const threadId = parseInt(req.body.threadId, 10);
+    const replyId = parseInt(req.body.replyId, 10);
+    const data = loadPosts();
+    const thread = data.threads.find(item => item.id === threadId);
+
+    if (!thread || !Array.isArray(thread.replies)) {
+      throw new Error('Thread not found.');
+    }
+
+    const replyIndex = thread.replies.findIndex(reply => reply.id === replyId);
+    if (replyIndex === -1) {
+      throw new Error('Reply not found.');
+    }
+
+    const [reply] = thread.replies.splice(replyIndex, 1);
+    deletePostUpload(reply);
+    recalculateThreadBump(thread);
+
+    savePosts(data);
+    generateHTML();
+    generateCatalogHTML();
+    res.redirect('/admin');
+  } catch (err) {
+    next(err);
+  }
+});
 
 app.get('/', (req, res) => {
   generateHTML();

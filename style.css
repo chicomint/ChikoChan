@@ -427,6 +427,113 @@ blockquote.comment {
   margin: 0 0 8px;
 }
 
+.admin-page {
+  margin: 26px auto;
+  max-width: 980px;
+  padding: 0 10px;
+}
+
+.admin-panel {
+  background: var(--form-bg);
+  border: 1px solid var(--form-border);
+  padding: 12px;
+}
+
+.admin-login-panel {
+  max-width: 360px;
+}
+
+.admin-panel h1,
+.admin-panel h2 {
+  color: var(--board-title-color);
+  margin: 0;
+}
+
+.admin-login-panel form {
+  display: grid;
+  gap: 8px;
+}
+
+.admin-login-panel input[type="password"] {
+  border: 1px solid #aaa0aa;
+  font: inherit;
+  padding: 4px 6px;
+}
+
+.admin-error {
+  color: var(--link-hover-color);
+  font-weight: bold;
+}
+
+.admin-muted {
+  color: var(--muted-text);
+  font-size: 12px;
+}
+
+.admin-toolbar,
+.admin-thread-header,
+.admin-reply {
+  align-items: flex-start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.admin-toolbar {
+  border-bottom: 1px solid var(--form-border);
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+}
+
+.admin-toolbar-actions {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+}
+
+.admin-toolbar-actions form,
+.admin-action-form {
+  margin: 0;
+}
+
+.admin-thread {
+  background: #ffffff;
+  border: 1px solid var(--reply-border);
+  margin: 10px 0;
+  padding: 10px;
+}
+
+.admin-post-summary p,
+.admin-reply p {
+  margin: 4px 0;
+}
+
+.admin-reply-list {
+  display: grid;
+  gap: 6px;
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+}
+
+.admin-reply {
+  background: var(--reply-bg);
+  border: 1px solid var(--reply-border);
+  padding: 8px;
+}
+
+.danger-button {
+  border-color: #8a1d2c;
+  color: #8a1d2c;
+  font-weight: bold;
+}
+
+.admin-delete-thread-form {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
 .thread::after,
 .reply::after,
 .replies::after {

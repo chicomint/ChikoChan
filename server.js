@@ -1,5 +1,6 @@
 const express = require('express');
 const multer = require('multer');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
@@ -14,8 +15,22 @@ const DATA_DIR = process.env.DATA_DIR || __dirname;
 const DATA_FILE = path.join(DATA_DIR, 'posts.json');
 const HTML_FILE = path.join(__dirname, 'index.html');
 const CATALOG_FILE = path.join(__dirname, 'catalog.html');
+const CLIENT_FILE = path.join(__dirname, 'client.js');
 const UPLOAD_DIR = path.join(DATA_DIR, 'src');
 const FAVICON_FILE = path.join(__dirname, 'chikki.ico');
+
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_NAME_LENGTH = 80;
+const MAX_TITLE_LENGTH = 120;
+const MAX_COMMENT_LENGTH = 4000;
+const MAX_REPLIES_PER_THREAD = 500;
+const DUPLICATE_REPLY_LOOKBACK = 20;
+const POST_RATE_WINDOW_MS = Number(process.env.POST_RATE_WINDOW_MS) || 60 * 1000;
+const POST_RATE_LIMIT = Number(process.env.POST_RATE_LIMIT) || 5;
+const POST_RATE_BUCKET_MAX = 1000;
+const ALLOWED_IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp']);
+const UPLOAD_FILE_PATTERN = /^\d+-(?:\d+|[a-f0-9]{16})\.(?:jpe?g|png|gif|webp)$/i;
+const postRateBuckets = new Map();
 
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -29,30 +44,80 @@ if (!fs.existsSync(DATA_FILE)) {
   fs.writeFileSync(DATA_FILE, JSON.stringify({ lastId: 0, threads: [] }, null, 2), 'utf8');
 }
 
-app.use(express.urlencoded({ extended: true }));
-app.use('/src', express.static(UPLOAD_DIR));
-app.use('/style.css', express.static(path.join(__dirname, 'style.css')));
+app.disable('x-powered-by');
+
+if (process.env.TRUST_PROXY) {
+  app.set('trust proxy', process.env.TRUST_PROXY);
+}
+
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'same-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  res.setHeader('Content-Security-Policy', [
+    "default-src 'self'",
+    "base-uri 'none'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+    "img-src 'self' data:",
+    "object-src 'none'",
+    "script-src 'self'",
+    "style-src 'self'"
+  ].join('; '));
+  next();
+});
+
+app.use(express.urlencoded({ extended: true, limit: '16kb', parameterLimit: 20 }));
+app.get('/style.css', (req, res) => {
+  res.type('text/css');
+  res.sendFile(path.join(__dirname, 'style.css'));
+});
+
+app.get('/client.js', (req, res) => {
+  res.type('application/javascript');
+  res.sendFile(CLIENT_FILE);
+});
 
 app.get('/chikki.ico', (req, res) => {
   res.sendFile(FAVICON_FILE);
 });
 
+app.get('/src/:filename', (req, res) => {
+  const filename = String(req.params.filename || '');
+
+  if (!UPLOAD_FILE_PATTERN.test(filename)) {
+    res.status(404).send('Not found');
+    return;
+  }
+
+  const filePath = path.join(UPLOAD_DIR, filename);
+  const imageType = detectImageFile(filePath);
+
+  if (!imageType) {
+    res.status(404).send('Not found');
+    return;
+  }
+
+  res.type(imageType.mime);
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+  res.sendFile(filePath);
+});
+
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, UPLOAD_DIR),
   filename: (req, file, cb) => {
-    const allowedExts = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp']);
     const ext = path.extname(file.originalname).toLowerCase();
-    const safeExt = allowedExts.has(ext) ? ext : '.img';
-    const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+    const safeExt = ALLOWED_IMAGE_EXTS.has(ext) ? ext : '.img';
+    const uniqueSuffix = `${Date.now()}-${crypto.randomBytes(8).toString('hex')}`;
     cb(null, `${uniqueSuffix}${safeExt}`);
   }
 });
 
 const fileFilter = (req, file, cb) => {
-  const allowedTypes = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
   const ext = path.extname(file.originalname).toLowerCase();
 
-  if (allowedTypes.includes(ext)) {
+  if (ALLOWED_IMAGE_EXTS.has(ext)) {
     cb(null, true);
   } else {
     cb(new Error('Only standard image files are allowed: .jpg, .jpeg, .png, .gif, .webp'), false);
@@ -62,8 +127,159 @@ const fileFilter = (req, file, cb) => {
 const upload = multer({
   storage,
   fileFilter,
-  limits: { fileSize: 5 * 1024 * 1024 }
+  limits: {
+    fileSize: MAX_IMAGE_BYTES,
+    files: 1,
+    fields: 10,
+    fieldNameSize: 40,
+    fieldSize: MAX_COMMENT_LENGTH + 1024,
+    parts: 12
+  }
 });
+
+function getClientKey(req) {
+  return req.ip || req.socket?.remoteAddress || 'unknown';
+}
+
+function pruneRateBuckets(now) {
+  if (postRateBuckets.size <= POST_RATE_BUCKET_MAX) return;
+
+  for (const [key, bucket] of postRateBuckets) {
+    if (now - bucket.windowStart > POST_RATE_WINDOW_MS) {
+      postRateBuckets.delete(key);
+    }
+  }
+}
+
+function postRateLimit(req, res, next) {
+  const now = Date.now();
+  const key = getClientKey(req);
+  const current = postRateBuckets.get(key);
+  const bucket = current && now - current.windowStart < POST_RATE_WINDOW_MS
+    ? current
+    : { windowStart: now, count: 0 };
+
+  if (bucket.count >= POST_RATE_LIMIT) {
+    const err = new Error('Too many posts from this address. Wait a minute and try again.');
+    err.status = 429;
+    next(err);
+    return;
+  }
+
+  bucket.count += 1;
+  postRateBuckets.set(key, bucket);
+  pruneRateBuckets(now);
+  next();
+}
+
+function safeUnlink(filePath) {
+  if (!filePath) return;
+
+  try {
+    fs.unlinkSync(filePath);
+  } catch (err) {
+    if (err.code !== 'ENOENT') {
+      console.warn(`Could not remove upload ${filePath}: ${err.message}`);
+    }
+  }
+}
+
+function removeUploadedFile(req) {
+  if (req.file?.path) {
+    safeUnlink(req.file.path);
+  }
+}
+
+function imageTypeFromBuffer(buffer) {
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    return { mime: 'image/jpeg', extensions: ['.jpg', '.jpeg'] };
+  }
+
+  if (
+    buffer.length >= 8 &&
+    buffer[0] === 0x89 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x4e &&
+    buffer[3] === 0x47 &&
+    buffer[4] === 0x0d &&
+    buffer[5] === 0x0a &&
+    buffer[6] === 0x1a &&
+    buffer[7] === 0x0a
+  ) {
+    return { mime: 'image/png', extensions: ['.png'] };
+  }
+
+  const header = buffer.toString('ascii', 0, Math.min(buffer.length, 12));
+
+  if (header.startsWith('GIF87a') || header.startsWith('GIF89a')) {
+    return { mime: 'image/gif', extensions: ['.gif'] };
+  }
+
+  if (header.startsWith('RIFF') && header.slice(8, 12) === 'WEBP') {
+    return { mime: 'image/webp', extensions: ['.webp'] };
+  }
+
+  return null;
+}
+
+function detectImageFile(filePath) {
+  try {
+    const fd = fs.openSync(filePath, 'r');
+    const buffer = Buffer.alloc(16);
+    const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
+    fs.closeSync(fd);
+    return imageTypeFromBuffer(buffer.subarray(0, bytesRead));
+  } catch (err) {
+    return null;
+  }
+}
+
+function validateUploadedImage(file) {
+  if (!file) return;
+
+  const ext = path.extname(file.originalname).toLowerCase();
+  const imageType = detectImageFile(file.path);
+
+  if (!imageType || !imageType.extensions.includes(ext)) {
+    safeUnlink(file.path);
+    throw new Error('Uploaded file contents do not match a standard image type.');
+  }
+}
+
+function readField(body, name, fallback, maxLength, label) {
+  const text = cleanText(body[name], fallback);
+
+  if (text.length > maxLength) {
+    throw new Error(`${label} is too long. Maximum is ${maxLength} characters.`);
+  }
+
+  return text;
+}
+
+function assertHoneypotEmpty(body) {
+  if (String(body.website || '').trim()) {
+    throw new Error('Post rejected.');
+  }
+}
+
+function normalizeForSpam(text) {
+  return String(text || '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+function assertNotDuplicateReply(thread, comment) {
+  const normalized = normalizeForSpam(comment);
+  if (normalized.length < 8) return;
+
+  const replies = Array.isArray(thread.replies) ? thread.replies : [];
+  const duplicateCount = replies
+    .slice(-DUPLICATE_REPLY_LOOKBACK)
+    .filter(reply => normalizeForSpam(reply.comment) === normalized)
+    .length;
+
+  if (duplicateCount >= 2) {
+    throw new Error('Duplicate reply detected. Please do not post the same message repeatedly.');
+  }
+}
 
 function loadPosts() {
   try {
@@ -80,11 +296,13 @@ function loadPosts() {
 }
 
 function savePosts(data) {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2), 'utf8');
+  const tempFile = `${DATA_FILE}.${process.pid}.tmp`;
+  fs.writeFileSync(tempFile, JSON.stringify(data, null, 2), 'utf8');
+  fs.renameSync(tempFile, DATA_FILE);
 }
 
 function cleanText(value, fallback = '') {
-  const text = String(value || '').trim();
+  const text = String(value || '').replace(/\0/g, '').trim();
   return text || fallback;
 }
 
@@ -245,6 +463,7 @@ function replyFormHTML(threadId, replyCount, options = {}) {
       <form action="/reply" method="POST" enctype="multipart/form-data">
         <input type="hidden" name="threadId" value="${threadId}">
         <input type="hidden" name="redirectTo" value="${redirectTo}">
+        <input class="honeypot-field" type="text" name="website" autocomplete="off" tabindex="-1" aria-hidden="true">
         <table class="reply-form-table">
           <tbody>
             <tr>
@@ -305,6 +524,7 @@ function newThreadFormHTML() {
   return `
   <div class="post-form-wrapper">
     <form id="post-form" action="/post" method="POST" enctype="multipart/form-data">
+      <input class="honeypot-field" type="text" name="website" autocomplete="off" tabindex="-1" aria-hidden="true">
       <table class="post-form-table">
         <tbody>
           <tr>
@@ -337,43 +557,7 @@ function newThreadFormHTML() {
 
 function quoteScriptHTML() {
   return `
-  <script>
-    function quotePost(postId, threadId) {
-      const details = document.getElementById('reply-form-' + threadId);
-      if (details && details.tagName.toLowerCase() === 'details') {
-        details.open = true;
-      }
-
-      const textarea = document.getElementById('reply-comment-' + threadId);
-      if (!textarea) return true;
-
-      const quoteText = '>>' + postId + '\\n';
-      if (textarea.value && !textarea.value.endsWith('\\n')) {
-        textarea.value += '\\n';
-      }
-      textarea.value += quoteText;
-      textarea.focus();
-      location.hash = 'reply-form-' + threadId;
-      return false;
-    }
-
-    document.addEventListener('click', function(event) {
-      const link = event.target.closest('[data-quote-id][data-thread-id]');
-      if (!link) return;
-      if (quotePost(link.dataset.quoteId, link.dataset.threadId) === false) {
-        event.preventDefault();
-      }
-    });
-
-    document.addEventListener('DOMContentLoaded', function() {
-      const params = new URLSearchParams(window.location.search);
-      const quoteId = params.get('quote');
-      const threadId = document.body.dataset.threadId;
-      if (quoteId && threadId) {
-        quotePost(quoteId, threadId);
-      }
-    });
-  </script>`;
+  <script src="/client.js" defer></script>`;
 }
 
 function pageShell(title, activePage, statsLine, bodyHTML, options = {}) {
@@ -535,11 +719,14 @@ app.get('/thread/:id', (req, res) => {
   res.send(threadHTMLPage);
 });
 
-app.post('/post', upload.single('image'), (req, res, next) => {
+app.post('/post', postRateLimit, upload.single('image'), (req, res, next) => {
   try {
-    const name = cleanText(req.body.name, 'Anonymous');
-    const title = cleanText(req.body.title);
-    const comment = cleanText(req.body.comment);
+    assertHoneypotEmpty(req.body);
+    validateUploadedImage(req.file);
+
+    const name = readField(req.body, 'name', 'Anonymous', MAX_NAME_LENGTH, 'Name');
+    const title = readField(req.body, 'title', '', MAX_TITLE_LENGTH, 'Subject');
+    const comment = readField(req.body, 'comment', '', MAX_COMMENT_LENGTH, 'Comment');
 
     if (!comment) {
       throw new Error('Comment field is required.');
@@ -573,15 +760,19 @@ app.post('/post', upload.single('image'), (req, res, next) => {
     generateCatalogHTML();
     res.redirect(`/thread/${newThreadId}#p${newThreadId}`);
   } catch (err) {
+    removeUploadedFile(req);
     next(err);
   }
 });
 
-app.post('/reply', upload.single('image'), (req, res, next) => {
+app.post('/reply', postRateLimit, upload.single('image'), (req, res, next) => {
   try {
+    assertHoneypotEmpty(req.body);
+    validateUploadedImage(req.file);
+
     const threadId = parseInt(req.body.threadId, 10);
-    const name = cleanText(req.body.name, 'Anonymous');
-    const comment = cleanText(req.body.comment);
+    const name = readField(req.body, 'name', 'Anonymous', MAX_NAME_LENGTH, 'Name');
+    const comment = readField(req.body, 'comment', '', MAX_COMMENT_LENGTH, 'Comment');
 
     if (!comment) {
       throw new Error('Comment field is required.');
@@ -593,6 +784,16 @@ app.post('/reply', upload.single('image'), (req, res, next) => {
     if (!thread) {
       throw new Error('Thread not found.');
     }
+
+    if (!Array.isArray(thread.replies)) {
+      thread.replies = [];
+    }
+
+    if (thread.replies.length >= MAX_REPLIES_PER_THREAD) {
+      throw new Error('This thread has reached the reply limit.');
+    }
+
+    assertNotDuplicateReply(thread, comment);
 
     data.lastId += 1;
     const reply = {
@@ -608,13 +809,9 @@ app.post('/reply', upload.single('image'), (req, res, next) => {
       reply.imageSize = formatBytes(req.file.size);
     }
 
-    if (!Array.isArray(thread.replies)) {
-      thread.replies = [];
-    }
-
     thread.replies.push(reply);
 
-    if (thread.replies.length <= 500) {
+    if (thread.replies.length <= MAX_REPLIES_PER_THREAD) {
       thread.bumpedAt = Date.now();
     }
 
@@ -625,12 +822,15 @@ app.post('/reply', upload.single('image'), (req, res, next) => {
     generateCatalogHTML();
     res.redirect(`/thread/${threadId}#p${newReplyId}`);
   } catch (err) {
+    removeUploadedFile(req);
     next(err);
   }
 });
 
 app.use((err, req, res, next) => {
-  res.status(400).send(`<!DOCTYPE html>
+  const status = Number(err.status) || 400;
+
+  res.status(status).send(`<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -644,7 +844,7 @@ app.use((err, req, res, next) => {
   <div class="error-card">
     <h2>Post failed</h2>
     <p>${escapeHTML(err.message)}</p>
-    <button onclick="window.history.back()">Go back</button>
+    <p>[ <a href="/">Back to board</a> ] [ <a href="/catalog">Catalog</a> ]</p>
   </div>
 </body>
 </html>`);

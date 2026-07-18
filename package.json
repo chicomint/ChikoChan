@@ -1,14 +1,24 @@
 {
-  "name": "chiko_chan",
-  "version": "1.0.0",
-  "description": "",
+  "name": "chikochan",
+  "version": "2.0.0",
+  "description": "A lightweight, JSON-backed Node.js imageboard inspired by Vichan.",
   "main": "server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node server.js"
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "node --test",
+    "check": "node --check server.js && node --check app.js && node --check client.js"
   },
-  "keywords": [],
-  "author": "",
+  "engines": {
+    "node": ">=22"
+  },
+  "keywords": [
+    "imageboard",
+    "vichan",
+    "4chan-api",
+    "json"
+  ],
+  "author": "ChikoChan contributors",
   "license": "ISC",
   "dependencies": {
     "express": "^5.2.1",

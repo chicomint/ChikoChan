@@ -1,5 +1,9 @@
 {
+  "version": 2,
   "lastId": 1,
+  "meta": {
+    "siteSecret": "k7Z2muwMCZMgZJsbvvxQDCZfWUf9aK0fm_eIpW41nmM"
+  },
   "threads": [
     {
       "id": 1,
@@ -11,7 +15,17 @@
       "image": "src/1781923458935-491345423.png",
       "imageName": "chikki.png",
       "imageSize": "2.29 KB",
-      "replies": []
+      "replies": [],
+      "trip": "",
+      "references": [],
+      "backlinks": [],
+      "spoiler": false,
+      "sticky": false,
+      "locked": false,
+      "cyclic": false
     }
-  ]
+  ],
+  "reports": [],
+  "bans": [],
+  "moderationLog": []
 }

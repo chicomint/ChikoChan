@@ -1,4 +1,9 @@
 {
+  "version": 2,
   "lastId": 0,
-  "threads": []
+  "meta": {},
+  "threads": [],
+  "reports": [],
+  "bans": [],
+  "moderationLog": []
 }

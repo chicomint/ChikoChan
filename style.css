@@ -768,3 +768,376 @@ blockquote.comment {
     max-width: 118px;
   }
 }
+
+/* Functional additions inherit the original ChikoChan palette and spacing. */
+.postContainer,
+.post {
+  max-width: 100%;
+}
+
+.opContainer::after,
+.post::after {
+  clear: both;
+  content: "";
+  display: table;
+}
+
+.delete {
+  height: 12px;
+  margin: 0 3px 0 0;
+  padding: 0;
+  vertical-align: -2px;
+  width: 12px;
+}
+
+.trip {
+  color: var(--name-color);
+  font-weight: normal;
+  margin-right: 4px;
+}
+
+.poster-id {
+  background: rgba(255, 255, 255, 0.45);
+  color: var(--muted-text);
+  font-size: 10px;
+  font-weight: bold;
+  margin-right: 4px;
+  padding: 1px 3px;
+}
+
+.sage {
+  color: var(--link-hover-color);
+  font-size: 10px;
+  font-weight: normal;
+  margin-right: 4px;
+}
+
+.post-status {
+  color: var(--muted-text);
+  font-size: 10px;
+  margin-left: 5px;
+}
+
+.post-hide-button {
+  background: transparent;
+  border: 0;
+  color: var(--muted-text);
+  font-size: 11px;
+  line-height: 1;
+  margin-left: 5px;
+  padding: 0 2px;
+}
+
+.post-hide-button:hover {
+  background: transparent;
+  color: var(--link-hover-color);
+}
+
+.backlinks {
+  clear: both;
+  color: var(--muted-text);
+  font-size: 10px;
+  margin: 3px 0 3px 20px;
+}
+
+.reply .backlinks {
+  margin-left: 0;
+}
+
+.backlinks span {
+  margin-right: 2px;
+}
+
+.backlink {
+  margin-right: 4px;
+}
+
+.deadlink {
+  color: var(--muted-text);
+  text-decoration: line-through;
+}
+
+.spoiler {
+  background: #221c20;
+  color: #221c20;
+  padding: 0 2px;
+}
+
+.spoiler:hover,
+.spoiler:focus {
+  color: #ffffff;
+}
+
+.heading {
+  color: var(--subject-color);
+  font-size: 1.08em;
+  font-weight: bold;
+}
+
+.spoiler-image .post-img {
+  filter: blur(14px);
+  opacity: 0.58;
+}
+
+.spoiler-image .fileThumb::after {
+  background: rgba(31, 23, 26, 0.82);
+  color: #ffffff;
+  content: "Spoiler";
+  left: 50%;
+  padding: 3px 8px;
+  pointer-events: none;
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.spoiler-image .fileThumb {
+  display: block;
+  position: relative;
+}
+
+.spoiler-image.spoiler-revealed .post-img {
+  filter: none;
+  opacity: 1;
+}
+
+.spoiler-image.spoiler-revealed .fileThumb::after {
+  display: none;
+}
+
+.expanded-image .post-img {
+  max-height: none !important;
+  max-width: none !important;
+}
+
+.post-highlighted {
+  box-shadow: 0 0 0 2px rgba(176, 0, 32, 0.55);
+}
+
+.quote-preview {
+  background: var(--reply-bg);
+  border: 1px solid var(--reply-border);
+  box-shadow: 2px 3px 8px rgba(40, 20, 32, 0.28);
+  display: block;
+  float: none;
+  max-height: min(70vh, 520px);
+  max-width: min(620px, 80vw);
+  min-width: 220px;
+  overflow: auto;
+  padding: 7px 9px;
+  pointer-events: none;
+  position: fixed;
+  z-index: 1000;
+}
+
+.quote-preview .image-box {
+  float: left;
+  margin-left: 0;
+}
+
+.post-hidden {
+  display: none !important;
+}
+
+.show-hidden-post {
+  background: transparent;
+  border: 0;
+  color: var(--muted-text);
+  font-size: 10px;
+  margin: 2px 0 5px 20px;
+  padding: 0;
+}
+
+.report-control {
+  clear: both;
+  color: var(--muted-text);
+  font-size: 10px;
+  margin: 2px 0 0;
+}
+
+.report-control summary {
+  cursor: pointer;
+  display: inline;
+  text-decoration: underline;
+}
+
+.report-control form {
+  align-items: center;
+  background: var(--form-bg);
+  border: 1px solid var(--form-border);
+  display: flex;
+  gap: 5px;
+  margin-top: 4px;
+  padding: 4px;
+  width: max-content;
+}
+
+.report-control input[type="text"] {
+  border: 1px solid #aaa0aa;
+  font: inherit;
+  width: 220px;
+}
+
+.thread-locked-message {
+  clear: both;
+  color: var(--muted-text);
+  font-size: 11px;
+  margin-left: 26px;
+}
+
+.post-form-table select,
+.reply-form-table select,
+.post-form-table input[type="password"],
+.reply-form-table input[type="password"] {
+  background: #ffffff;
+  border: 1px solid #aaa0aa;
+  color: var(--text-color);
+  font: inherit;
+  padding: 2px 4px;
+}
+
+.post-form-table input[type="password"] {
+  width: 210px;
+}
+
+.reply-form-table input[type="password"] {
+  width: 172px;
+}
+
+.inline-option {
+  color: var(--muted-text);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.delete-form {
+  align-items: center;
+  background: var(--form-bg);
+  border: 1px solid var(--form-border);
+  display: flex;
+  float: right;
+  font-size: 11px;
+  gap: 7px;
+  margin: 10px 4px 16px;
+  padding: 5px 7px;
+}
+
+.delete-form input[type="password"] {
+  border: 1px solid #aaa0aa;
+  font: inherit;
+  width: 120px;
+}
+
+.pagination {
+  clear: both;
+  font-size: 12px;
+  margin: 12px 4px;
+}
+
+.announcement {
+  background: var(--form-bg);
+  border: 1px solid var(--form-border);
+  color: var(--board-title-color);
+  font-size: 11px;
+  font-weight: bold;
+  margin: 0 auto 10px;
+  max-width: 760px;
+  padding: 5px 8px;
+  text-align: center;
+}
+
+.catalog-tools {
+  font-size: 11px;
+  margin: -7px 0 10px;
+  text-align: center;
+}
+
+.catalog-tools input,
+.search-page input[type="search"] {
+  border: 1px solid #aaa0aa;
+  font: inherit;
+  padding: 2px 4px;
+}
+
+.catalog-spoiler {
+  filter: blur(12px);
+}
+
+.search-page {
+  margin: 0 auto;
+  max-width: 850px;
+}
+
+.search-page > form {
+  background: var(--form-bg);
+  border: 1px solid var(--form-border);
+  padding: 7px;
+}
+
+.search-result {
+  background: var(--reply-bg);
+  border: 1px solid var(--reply-border);
+  margin: 7px 0;
+  padding: 7px;
+}
+
+.search-result .comment {
+  margin-bottom: 2px;
+}
+
+.admin-section {
+  border-top: 1px solid var(--form-border);
+  margin-top: 14px;
+  padding-top: 9px;
+}
+
+.admin-list {
+  display: grid;
+  gap: 5px;
+  margin: 8px 0;
+  padding-left: 22px;
+}
+
+.admin-list li,
+.admin-post-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.admin-post-summary {
+  border-top: 1px dotted var(--reply-border);
+  margin-top: 7px;
+  padding-top: 7px;
+}
+
+.admin-reply-list {
+  margin-left: 18px;
+}
+
+.admin-ban-form input {
+  border: 1px solid #aaa0aa;
+  font: inherit;
+  width: 150px;
+}
+
+@media (max-width: 768px) {
+  .quote-preview {
+    display: none;
+  }
+
+  .delete-form,
+  .report-control form {
+    align-items: flex-start;
+    flex-direction: column;
+    float: none;
+    margin-left: 8px;
+    width: auto;
+  }
+
+  .expanded-image .post-img {
+    height: auto;
+    max-width: calc(100vw - 28px) !important;
+  }
+}

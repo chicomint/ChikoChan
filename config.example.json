@@ -1,0 +1,36 @@
+{
+  "host": "0.0.0.0",
+  "port": 3000,
+  "dataDir": ".",
+  "trustProxy": false,
+  "board": {
+    "uri": "chiko",
+    "title": "ChikoChan",
+    "description": "Welcome to ChikoChan, (off topic) Talk about any! ,no nsfw",
+    "anonymousName": "Anonymous",
+    "announcement": ""
+  },
+  "limits": {
+    "maxFileBytes": 5242880,
+    "maxThreads": 100,
+    "threadsPerPage": 10,
+    "previewReplies": 3,
+    "bumpLimit": 250,
+    "replyLimit": 500,
+    "postRateWindowMs": 60000,
+    "postRateLimit": 5
+  },
+  "features": {
+    "requireImageForThread": true,
+    "userDeletion": true,
+    "reports": true,
+    "tripcodes": true,
+    "posterIds": false,
+    "spoilerImages": true,
+    "rejectDuplicateImages": false,
+    "search": true,
+    "rss": true,
+    "api": true
+  },
+  "wordFilters": []
+}

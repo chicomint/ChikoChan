@@ -24,7 +24,7 @@ const DEFAULTS = {
     title: 'ChikoChan',
     description: 'Welcome to ChikoChan, (off topic) Talk about any! ,no nsfw',
     anonymousName: 'Anonymous',
-    announcement: 'Chikochan are update today!, nothing much, check some around!'
+    announcement: ''
   },
   limits: {
     maxFileBytes: 5 * 1024 * 1024,

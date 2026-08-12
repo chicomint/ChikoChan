@@ -183,6 +183,49 @@ test('file-only deletion retains the post and removes its upload', async t => {
   assert.equal(fs.existsSync(uploadPath), false);
 });
 
+test('#fortune name prepends a greentext fortune and hides the keyword', async t => {
+  const server = await testServer(t, {
+    features: { fortunes: true },
+    fortunes: ['Good news will come to you by mail.', 'Bad Luck.']
+  });
+  const thread = await createThread(server.url, { name: '#fortune', comment: 'tell my fortune' });
+
+  const stored = JSON.parse(fs.readFileSync(path.join(server.directory, 'posts.json'), 'utf8'));
+  const op = stored.threads[0];
+  assert.equal(op.name, 'Anonymous');
+  assert.equal(op.trip, '');
+  assert.match(op.comment, /^>Your fortune: (Good news will come to you by mail\.|Bad Luck\.)\ntell my fortune$/);
+
+  const replyForm = new FormData();
+  replyForm.set('resto', String(thread.id));
+  replyForm.set('name', '#fortune');
+  replyForm.set('com', 'reply comment');
+  replyForm.set('pwd', 'reply-password');
+  const replyResponse = await fetch(`${server.url}/post?json=1`, { method: 'POST', body: replyForm });
+  const replyBody = await replyResponse.text();
+  assert.equal(replyResponse.status, 201, replyBody);
+  const reply = JSON.parse(replyBody);
+  const replyStored = JSON.parse(fs.readFileSync(path.join(server.directory, 'posts.json'), 'utf8'));
+  const storedReply = replyStored.threads[0].replies.find(item => item.id === reply.id);
+  assert.equal(storedReply.name, 'Anonymous');
+  assert.match(storedReply.comment, /^>Your fortune: (Good news will come to you by mail\.|Bad Luck\.)\nreply comment$/);
+
+  const page = await fetch(`${server.url}/chiko/thread/${thread.id}`);
+  const html = await page.text();
+  assert.equal(page.status, 200);
+  assert.match(html, /<span class="greentext">&gt;Your fortune: /);
+  assert.doesNotMatch(html, /#fortune/);
+  assert.doesNotMatch(html, /Alice/);
+});
+
+test('#fortune as a tripcode password still produces a tripcode', async t => {
+  const server = await testServer(t, { fortunes: ['Only fortune.'] });
+  const thread = await createThread(server.url, { name: '#fortune#secret' });
+  const stored = JSON.parse(fs.readFileSync(path.join(server.directory, 'posts.json'), 'utf8'));
+  assert.notEqual(stored.threads[0].trip, '');
+  assert.doesNotMatch(stored.threads[0].comment, /Your fortune:/);
+});
+
 test('admin reports, thread controls, and keyed bans work without storing raw IPs', async t => {
   const server = await testServer(t, {
     adminPassword: 'admin-test-password',

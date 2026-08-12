@@ -55,8 +55,31 @@ const DEFAULTS = {
     rejectDuplicateImages: false,
     search: true,
     rss: true,
-    api: true
+    api: true,
+    fortunes: true
   },
+  fortunes: [
+    'not really.',
+    'Stay home. Just... stay home.',
+    'Good Way is... kill your self (^///^)',
+    'Good luck.',
+    'You are Fucked',
+    'Excellent Luck',
+    'Very Bad Luck',
+    'Bad Luck',
+    'Better not tell you now',
+    'Chicken is watching you. Be careful.',
+    'Reply hazy, try again',
+    'Average Luck',
+    'Outlook good',
+    'Godly Luck',
+    'Good news will come to you by mail',
+    'pls stop. Im tried',
+    'play osu.',
+    'Can i not telling you??',
+    '(≧∀≦)ゞ',
+    'Dont play osu.',
+  ],
   wordFilters: []
 };
 
@@ -164,6 +187,10 @@ function loadConfig(overrides = {}) {
     throw new Error('limits.deleteDelaySeconds must be a non-negative integer.');
   }
   if (!Array.isArray(config.wordFilters)) throw new Error('wordFilters must be an array.');
+  if (!Array.isArray(config.fortunes)) throw new Error('fortunes must be an array.');
+  for (const entry of config.fortunes) {
+    if (typeof entry !== 'string') throw new Error('fortunes must contain only strings.');
+  }
 
   for (const [name, enabled] of Object.entries(config.features)) {
     if (typeof enabled !== 'boolean') throw new Error(`features.${name} must be true or false.`);

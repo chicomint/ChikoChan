@@ -32,7 +32,7 @@ test('migrates legacy data and stores references and backlinks', t => {
   const store = new JsonStore(config);
   const data = store.read();
 
-  assert.equal(data.version, 2);
+  assert.equal(data.version, 3);
   assert.equal(data.lastId, 11);
   assert.ok(data.meta.siteSecret.length >= 32);
   assert.deepEqual(data.threads[0].replies[0].references, [10]);

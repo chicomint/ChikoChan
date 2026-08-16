@@ -1,0 +1,6 @@
+.env
+posts.json
+posts.json.backup
+src/
+test/
+Image/

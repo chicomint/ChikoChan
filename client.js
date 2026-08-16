@@ -3,7 +3,34 @@
 
   var PASSWORD_KEY = 'chikochan-post-password';
   var HIDDEN_KEY = 'chikochan-hidden-posts';
+  var THEME_KEY = 'chikochan-theme';
   var preview = null;
+
+  function applyTheme(theme) {
+    var root = document.documentElement;
+    var isDark = theme === 'dark';
+    if (isDark) root.setAttribute('data-theme', 'dark');
+    else root.removeAttribute('data-theme');
+    document.querySelectorAll('.theme-toggle').forEach(function (button) {
+      button.textContent = isDark ? 'Light' : 'Dark';
+    });
+  }
+
+  function toggleTheme() {
+    var current = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+    var next = current === 'dark' ? 'light' : 'dark';
+    try {
+      window.localStorage.setItem(THEME_KEY, next);
+    } catch (error) {
+      // ignore
+    }
+    applyTheme(next);
+  }
+
+  function initializeTheme() {
+    var saved = storageGet(THEME_KEY, 'light');
+    applyTheme(saved);
+  }
 
   function storageGet(key, fallback) {
     try {
@@ -160,6 +187,11 @@
   }
 
   document.addEventListener('click', function (event) {
+    if (event.target.closest('.theme-toggle')) {
+      toggleTheme();
+      return;
+    }
+
     var quoteLink = event.target.closest('[data-quote-id][data-thread-id]');
     if (quoteLink && quotePost(quoteLink.dataset.quoteId, quoteLink.dataset.threadId) === false) {
       event.preventDefault();
@@ -220,6 +252,7 @@
   });
 
   document.addEventListener('DOMContentLoaded', function () {
+    initializeTheme();
     initializePasswords();
     initializeHiddenPosts();
     initializeCatalogFilter();

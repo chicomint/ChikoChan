@@ -15,6 +15,7 @@ const ONE_PIXEL_PNG = Buffer.from(
 async function testServer(t, overrides = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'chikochan-http-'));
   const app = createApp({
+    storage: 'json',
     dataDir: directory,
     limits: { postRateLimit: 100, reportRateLimit: 100 },
     ...overrides

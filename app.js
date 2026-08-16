@@ -7,6 +7,7 @@ const { loadConfig } = require('./config');
 const { AdminAuth } = require('./lib/admin-auth');
 const { apiBoards, apiCatalog, apiThread, apiThreads } = require('./lib/api');
 const { BoardService } = require('./lib/board');
+const { MongoStore } = require('./lib/mongo-store');
 const { Renderer } = require('./lib/render');
 const { JsonStore } = require('./lib/store');
 const { UploadManager } = require('./lib/uploads');
@@ -55,7 +56,8 @@ function safeRedirect(value, fallback) {
 
 function createApp(overrides = {}) {
   const config = loadConfig(overrides);
-  const store = new JsonStore(config);
+  const store = overrides.store || (config.storage === 'json' ? new JsonStore(config) : new MongoStore(config));
+  store.ready ||= Promise.resolve(store);
   const uploads = new UploadManager(config);
   const service = new BoardService(config, store, uploads);
   const renderer = new Renderer(config);
@@ -104,9 +106,16 @@ function createApp(overrides = {}) {
     });
   }
 
-  staticFile(['/style.css', `/${config.board.uri}/style.css`], 'style.css', 'text/css');
-  staticFile(['/client.js', `/${config.board.uri}/client.js`], 'client.js', 'application/javascript');
+  staticFile('/style.css', 'style.css', 'text/css');
+  staticFile('/client.js', 'client.js', 'application/javascript');
   staticFile(['/chikki.ico', '/favicon.ico'], 'chikki.ico', 'image/x-icon', 'public, max-age=86400');
+
+  app.get('/banner.png', (request, response, next) => {
+    const bannerPath = path.join(config.rootDir, 'banner.png');
+    if (!fs.existsSync(bannerPath)) return next();
+    response.setHeader('Cache-Control', 'public, max-age=3600');
+    response.sendFile(bannerPath);
+  });
 
   function serveUpload(request, response) {
     const image = uploads.inspectServedFile(request.params.filename);
@@ -120,14 +129,22 @@ function createApp(overrides = {}) {
   }
 
   app.get('/src/:filename', serveUpload);
-  app.get(`/${config.board.uri}/src/:filename`, serveUpload);
 
   app.get('/healthz', (request, response) => {
     response.setHeader('Cache-Control', 'no-store');
     response.json({ status: 'ok' });
   });
 
-  app.get('/readyz', (request, response) => {
+  app.use(async (request, response, next) => {
+    try {
+      await store.ready;
+      next();
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get('/readyz', async (request, response) => {
     response.setHeader('Cache-Control', 'no-store');
     try {
       service.getData();
@@ -147,87 +164,73 @@ function createApp(overrides = {}) {
   }
 
   if (config.features.api) {
-    app.get('/boards.json', (request, response) => apiResponse(response, apiBoards(config)));
-    app.get(`/${config.board.uri}/catalog.json`, (request, response) => {
+    app.get('/boards.json', (request, response) => {
       const data = service.getData();
-      apiResponse(response, apiCatalog(service, data));
-    });
-    app.get(`/${config.board.uri}/threads.json`, (request, response) => {
-      const data = service.getData();
-      apiResponse(response, apiThreads(service, data));
-    });
-    app.get(`/${config.board.uri}/archive.json`, (request, response) => apiResponse(response, []));
-    app.get(`/${config.board.uri}/index.json`, (request, response) => {
-      const page = service.getPage(1);
-      apiResponse(response, { threads: page.threads.map(thread => apiThread(thread, page.data, config, true)) });
-    });
-    app.get(`/${config.board.uri}/thread/:id.json`, (request, response) => {
-      const data = service.getData();
-      const thread = service.getThread(request.params.id, data);
-      if (!thread) throw httpError(404, 'Thread not found.');
-      apiResponse(response, apiThread(thread, data, config));
-    });
-    app.get(`/${config.board.uri}/res/:id.json`, (request, response) => {
-      const data = service.getData();
-      const thread = service.getThread(request.params.id, data);
-      if (!thread) throw httpError(404, 'Thread not found.');
-      apiResponse(response, apiThread(thread, data, config));
-    });
-    const pageApiPattern = new RegExp(`^/${config.board.uri}/(\\d+)\\.json$`);
-    app.get(pageApiPattern, (request, response) => {
-      const pageNumber = Number(request.params[0]) === 0 ? 1 : request.params[0];
-      const page = service.getPage(pageNumber);
-      if (!page) throw httpError(404, 'Board page not found.');
-      apiResponse(response, { threads: page.threads.map(thread => apiThread(thread, page.data, config, true)) });
+      apiResponse(response, apiBoards(config, data));
     });
   }
 
-  function renderBoardPage(pageNumber, response) {
-    const page = service.getPage(pageNumber);
+  function renderHome(request, response) {
+    const data = service.getData();
+    const boards = service.getBoards(data);
+    const siteStats = service.getSiteStats(data);
+    const latestPosts = service.latestPosts(50, data);
+    response.send(renderer.home(data, boards, siteStats, latestPosts));
+  }
+
+  app.get(['/', '/index.html'], renderHome);
+
+  for (const [key, page] of Object.entries(config.site?.pages || {})) {
+    app.get(`/${key}`, (request, response) => {
+      response.send(renderer.page(key, page));
+    });
+  }
+
+  function renderBoardPage(board, pageNumber, response) {
+    const page = service.getPage(pageNumber, board.uri);
     if (!page) throw httpError(404, 'Board page not found.');
     response.send(renderer.board(page));
   }
 
-  app.get(['/', '/index.html', `/${config.board.uri}/`, `/${config.board.uri}/index.html`], (request, response) => {
-    renderBoardPage(1, response);
-  });
-
-  const pageHtmlPattern = new RegExp(`^/${config.board.uri}/(\\d+)\\.html$`);
-  app.get(pageHtmlPattern, (request, response) => renderBoardPage(request.params[0], response));
-
-  app.get(['/catalog', `/${config.board.uri}/catalog`, `/${config.board.uri}/catalog.html`], (request, response) => {
-    const data = service.getData();
-    const threads = service.getSortedThreads(data);
-    response.send(renderer.catalog(data, threads, service.getStats(data)));
-  });
-
-  function renderThread(request, response) {
+  function renderThread(request, response, boardUri = null) {
     const data = service.getData();
     const thread = service.getThread(request.params.id, data);
     if (!thread) throw httpError(404, 'Thread not found.');
-    response.send(renderer.thread(thread, data, service.getStats(data)));
+    const board = boardUri
+      ? service.getBoard(boardUri, data)
+      : service.getBoardById(thread.boardId, data);
+    if (!board || !board.enabled || thread.boardId !== board.id) throw httpError(404, 'Thread not found.');
+    response.send(renderer.thread(thread, data, board, service.getStats(data, board.uri)));
   }
 
-  app.get('/thread/:id', renderThread);
-  app.get(`/${config.board.uri}/thread/:id`, renderThread);
-  app.get(`/${config.board.uri}/res/:id.html`, renderThread);
+  app.get('/thread/:id', (request, response) => renderThread(request, response));
+
+  app.get('/catalog', (request, response) => {
+    const data = service.getData();
+    const board = service.getDefaultBoard(data);
+    if (!board) throw httpError(404, 'Board not found.');
+    const threads = service.getSortedThreads(data, board.id);
+    response.send(renderer.catalog(data, threads, board, service.getStats(data, board.uri)));
+  });
 
   if (config.features.search) {
     app.get('/search', (request, response) => {
       const search = service.search(request.query.q);
       const data = search.data || service.getData();
-      response.send(renderer.search(search.query, search.results, data, service.getStats(data)));
+      response.send(renderer.search(search.query, search.results, data, service.getSiteStats(data)));
     });
   }
 
   if (config.features.rss) {
     app.get('/feed.xml', (request, response) => {
       const data = service.getData();
+      const boardMap = new Map(data.boards.map(board => [board.id, board]));
       const items = service.getSortedThreads(data).slice(0, 20).map(thread => {
-        const url = `${request.protocol}://${request.get('host')}${renderer.threadPath(thread.id)}`;
+        const board = boardMap.get(thread.boardId) || data.boards[0];
+        const url = `${request.protocol}://${request.get('host')}${renderer.threadPath(board, thread.id)}`;
         return `<item><title>${escapeXML(thread.title || `Thread No.${thread.id}`)}</title><link>${escapeXML(url)}</link><guid>${escapeXML(url)}</guid><pubDate>${new Date(thread.createdAt).toUTCString()}</pubDate><description>${escapeXML(thread.comment)}</description></item>`;
       }).join('');
-      response.type('application/rss+xml').send(`<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>${escapeXML(config.board.title)}</title><link>${escapeXML(`${request.protocol}://${request.get('host')}/`)}</link><description>${escapeXML(config.board.description)}</description>${items}</channel></rss>`);
+      response.type('application/rss+xml').send(`<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>${escapeXML(renderer.siteTitle())}</title><link>${escapeXML(`${request.protocol}://${request.get('host')}/`)}</link><description>${escapeXML(renderer.siteDescription())}</description>${items}</channel></rss>`);
     });
   }
 
@@ -244,28 +247,27 @@ function createApp(overrides = {}) {
     };
   }
 
-  function assertHoneypot(request) {
-    if (String(request.body.website || '').trim()) throw httpError(400, 'Post rejected.');
-    if (request.body.board && String(request.body.board) !== config.board.uri) {
-      throw httpError(400, 'Unknown board.');
-    }
-  }
-
   function postHandler(forceReply = false) {
-    return (request, response, next) => {
+    return async (request, response, next) => {
       const file = uploads.fileFromRequest(request);
       try {
-        assertHoneypot(request);
+        const boardUri = request.board?.uri || request.body.board;
+        let board = boardUri ? service.getBoard(boardUri) : null;
+        if (!board) board = service.getDefaultBoard();
+        if (!board || !board.enabled) throw httpError(404, 'Board not found.');
+
+        if (String(request.body.website || '').trim()) throw httpError(400, 'Post rejected.');
+
         const image = uploads.validate(file);
         const threadId = Number.parseInt(request.body.threadId || request.body.resto, 10) || 0;
-        const result = forceReply || threadId
-          ? service.createReply(threadId, request.body, image, { clientKey: clientKey(request) })
-          : service.createThread(request.body, image, { clientKey: clientKey(request) });
-        const location = `${renderer.threadPath(result.threadId)}#p${result.id}`;
+        const result = await (forceReply || threadId
+          ? service.createReply(threadId, request.body, image, { clientKey: clientKey(request), boardUri: board.uri })
+          : service.createThread(request.body, image, { clientKey: clientKey(request), boardId: board.id }));
+        const location = `${renderer.threadPath(board, result.threadId)}#p${result.id}`;
         if (isJsonRequest(request)) {
           response.status(201).json({ ok: true, id: result.id, threadId: result.threadId, url: location });
         } else {
-          response.redirect(303, location);
+          response.redirect(303, safeRedirect(request.body.redirectTo, location));
         }
       } catch (error) {
         if (file?.path) uploads.removePath(file.path);
@@ -274,26 +276,26 @@ function createApp(overrides = {}) {
     };
   }
 
-  app.post(['/post', '/post.php', `/${config.board.uri}/post`], rateLimit(postLimiter), uploads.middleware, postHandler(false));
+  app.post(['/post', '/post.php'], rateLimit(postLimiter), uploads.middleware, postHandler(false));
   app.post('/reply', rateLimit(postLimiter), uploads.middleware, postHandler(true));
 
-  app.post('/delete', (request, response, next) => {
+  app.post('/delete', async (request, response, next) => {
     try {
-      const result = service.deleteByPassword(request.body.postIds, request.body.password || request.body.pwd, Boolean(request.body.fileOnly));
+      const result = await service.deleteByPassword(request.body.postIds, request.body.password || request.body.pwd, Boolean(request.body.fileOnly));
       if (isJsonRequest(request)) response.json({ ok: true, ...result });
-      else response.redirect(303, '/');
+      else response.redirect(303, safeRedirect(request.body.redirectTo, '/'));
     } catch (error) {
       next(error);
     }
   });
 
-  app.post('/report', rateLimit(reportLimiter), (request, response, next) => {
+  app.post('/report', rateLimit(reportLimiter), async (request, response, next) => {
     try {
-      const report = service.reportPost(request.body.postId, request.body.reason);
+      const report = await service.reportPost(request.body.postId, request.body.reason);
       if (isJsonRequest(request)) response.status(201).json({ ok: true, reportId: report.id });
       else {
         const destination = safeRedirect(request.body.redirectTo, '/');
-        response.status(201).send(renderer.message('Report submitted', 'Thank you. A moderator can now review this post.', service.getStats(), destination));
+        response.status(201).send(renderer.message('Report submitted', 'Thank you. A moderator can now review this post.', service.getSiteStats(), destination));
       }
     } catch (error) {
       next(error);
@@ -351,6 +353,11 @@ function createApp(overrides = {}) {
     response.send(renderer.adminDashboard(service.getData(), admin.csrf(request.adminSession)));
   });
 
+  app.get('/admin/boards', requireAdmin, (request, response) => {
+    const data = service.getData();
+    response.send(renderer.adminBoards(data.boards, service.getDefaultBoard(data).id, admin.csrf(request.adminSession)));
+  });
+
   app.post('/admin/logout', requireAdmin, (request, response, next) => {
     try {
       requireCsrf(request);
@@ -361,61 +368,170 @@ function createApp(overrides = {}) {
     }
   });
 
-  app.post('/admin/delete', requireAdmin, (request, response, next) => {
+  app.post('/admin/delete', requireAdmin, async (request, response, next) => {
     try {
       requireCsrf(request);
-      service.adminDelete(request.body.postId);
+      await service.adminDelete(request.body.postId);
       response.redirect(303, '/admin');
     } catch (error) {
       next(error);
     }
   });
 
-  app.post('/admin/thread-setting', requireAdmin, (request, response, next) => {
+  app.post('/admin/thread-setting', requireAdmin, async (request, response, next) => {
     try {
       requireCsrf(request);
-      service.setThreadFlag(request.body.threadId, request.body.flag, request.body.value === '1');
+      await service.setThreadFlag(request.body.threadId, request.body.flag, request.body.value === '1');
       response.redirect(303, '/admin');
     } catch (error) {
       next(error);
     }
   });
 
-  app.post('/admin/dismiss-report', requireAdmin, (request, response, next) => {
+  app.post('/admin/dismiss-report', requireAdmin, async (request, response, next) => {
     try {
       requireCsrf(request);
-      service.dismissReport(request.body.reportId);
+      await service.dismissReport(request.body.reportId);
       response.redirect(303, '/admin');
     } catch (error) {
       next(error);
     }
   });
 
-  app.post('/admin/ban', requireAdmin, (request, response, next) => {
+  app.post('/admin/ban', requireAdmin, async (request, response, next) => {
     try {
       requireCsrf(request);
       const allowedDurations = new Set([0, 3600000, 86400000, 604800000]);
       const duration = Number(request.body.duration);
       if (!allowedDurations.has(duration)) throw httpError(400, 'Invalid ban duration.');
-      service.banPost(request.body.postId, duration, request.body.reason);
+      await service.banPost(request.body.postId, duration, request.body.reason);
       response.redirect(303, '/admin');
     } catch (error) {
       next(error);
     }
   });
 
-  app.post('/admin/unban', requireAdmin, (request, response, next) => {
+  app.post('/admin/unban', requireAdmin, async (request, response, next) => {
     try {
       requireCsrf(request);
-      service.unban(request.body.banId);
+      await service.unban(request.body.banId);
       response.redirect(303, '/admin');
     } catch (error) {
       next(error);
     }
   });
 
+  app.post('/admin/boards/add', requireAdmin, async (request, response, next) => {
+    try {
+      requireCsrf(request);
+      await service.addBoard(request.body);
+      response.redirect(303, '/admin/boards');
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post('/admin/boards/edit', requireAdmin, async (request, response, next) => {
+    try {
+      requireCsrf(request);
+      await service.updateBoard(request.body.uri, {
+        uri: request.body.newUri,
+        name: request.body.name,
+        description: request.body.description,
+        category: request.body.category,
+        enabled: request.body.enabled
+      });
+      response.redirect(303, '/admin/boards');
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post('/admin/boards/toggle', requireAdmin, async (request, response, next) => {
+    try {
+      requireCsrf(request);
+      await service.toggleBoard(request.body.uri);
+      response.redirect(303, '/admin/boards');
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post('/admin/boards/delete', requireAdmin, async (request, response, next) => {
+    try {
+      requireCsrf(request);
+      await service.deleteBoard(request.body.uri);
+      response.redirect(303, '/admin/boards');
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  function resolveBoard(request, response, next, value) {
+    const board = service.getBoard(value);
+    if (!board || !board.enabled) return next(httpError(404, 'Board not found.'));
+    request.board = board;
+    next();
+  }
+
+  app.param('boardUri', resolveBoard);
+
+  if (config.features.api) {
+    app.get('/:boardUri/catalog.json', (request, response) => {
+      const data = service.getData();
+      apiResponse(response, apiCatalog(service, data, request.board));
+    });
+    app.get('/:boardUri/threads.json', (request, response) => {
+      const data = service.getData();
+      apiResponse(response, apiThreads(service, data, request.board));
+    });
+    app.get('/:boardUri/archive.json', (request, response) => apiResponse(response, []));
+    app.get('/:boardUri/index.json', (request, response) => {
+      const page = service.getPage(1, request.board.uri);
+      if (!page) throw httpError(404, 'Board page not found.');
+      apiResponse(response, { threads: page.threads.map(thread => apiThread(thread, page.data, config, request.board, true)) });
+    });
+    app.get('/:boardUri/thread/:id.json', (request, response) => {
+      const data = service.getData();
+      const thread = service.getThread(request.params.id, data);
+      if (!thread || thread.boardId !== request.board.id) throw httpError(404, 'Thread not found.');
+      apiResponse(response, apiThread(thread, data, config, request.board));
+    });
+    app.get('/:boardUri/res/:id.json', (request, response) => {
+      const data = service.getData();
+      const thread = service.getThread(request.params.id, data);
+      if (!thread || thread.boardId !== request.board.id) throw httpError(404, 'Thread not found.');
+      apiResponse(response, apiThread(thread, data, config, request.board));
+    });
+    app.get('/:boardUri/:page.json', (request, response) => {
+      const pageNumber = Number(request.params.page) === 0 ? 1 : request.params.page;
+      const page = service.getPage(pageNumber, request.board.uri);
+      if (!page) throw httpError(404, 'Board page not found.');
+      apiResponse(response, { threads: page.threads.map(thread => apiThread(thread, page.data, config, request.board, true)) });
+    });
+  }
+
+  app.post('/:boardUri/post', rateLimit(postLimiter), uploads.middleware, postHandler(false));
+  app.post('/:boardUri/post.php', rateLimit(postLimiter), uploads.middleware, postHandler(false));
+
+  app.get('/:boardUri/', (request, response) => renderBoardPage(request.board, 1, response));
+  app.get('/:boardUri/index.html', (request, response) => renderBoardPage(request.board, 1, response));
+  app.get('/:boardUri/catalog', (request, response) => {
+    const data = service.getData();
+    const threads = service.getSortedThreads(data, request.board.id);
+    response.send(renderer.catalog(data, threads, request.board, service.getStats(data, request.board.uri)));
+  });
+  app.get('/:boardUri/catalog.html', (request, response) => {
+    const data = service.getData();
+    const threads = service.getSortedThreads(data, request.board.id);
+    response.send(renderer.catalog(data, threads, request.board, service.getStats(data, request.board.uri)));
+  });
+  app.get('/:boardUri/:page.html', (request, response) => renderBoardPage(request.board, request.params.page, response));
+  app.get('/:boardUri/thread/:id', (request, response) => renderThread(request, response, request.board.uri));
+  app.get('/:boardUri/res/:id.html', (request, response) => renderThread(request, response, request.board.uri));
+
   app.use((request, response) => {
-    response.status(404).send(renderer.message('Not found', 'That page or thread does not exist.', service.getStats(), '/'));
+    response.status(404).send(renderer.message('Not found', 'That page or thread does not exist.', service.getSiteStats(), '/'));
   });
 
   app.use((error, request, response, next) => {
@@ -431,7 +547,7 @@ function createApp(overrides = {}) {
     else response.send(renderer.message(
       status >= 500 ? 'Server error' : 'Request failed',
       message,
-      service.getStats(),
+      service.getSiteStats(),
       safeRedirect(request.get('referer'), '/')
     ));
   });

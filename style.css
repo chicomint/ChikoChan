@@ -56,13 +56,15 @@ a:focus {
 }
 
 .board-list {
+  align-items: center;
   border-bottom: 1px solid var(--form-border);
   color: var(--muted-text);
+  display: flex;
   font-size: 11px;
+  justify-content: space-between;
   line-height: 1.2;
   min-height: 20px;
   padding: 4px 0 3px;
-  position: relative;
 }
 
 .board-list a {
@@ -71,14 +73,18 @@ a:focus {
 }
 
 .board-index {
-  display: inline-block;
-  padding-right: 56px;
+  padding-right: 10px;
+}
+
+.board-extras {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+  white-space: nowrap;
 }
 
 .home-link {
-  position: absolute;
-  right: 0;
-  top: 4px;
+  position: static;
 }
 
 header {
@@ -1139,5 +1145,349 @@ blockquote.comment {
   .expanded-image .post-img {
     height: auto;
     max-width: calc(100vw - 28px) !important;
+  }
+}
+
+/* Homepage and board-directory styles using the existing pink palette. */
+.site-home {
+  padding: 0 5px 24px;
+}
+
+.site-header {
+  margin: 0 auto 12px;
+  max-width: 980px;
+  text-align: center;
+}
+
+.site-banner {
+  display: flex;
+  justify-content: center;
+  margin: 22px auto 0;
+}
+
+.site-banner h1 {
+  color: var(--board-title-color);
+  font-family: Tahoma, Arial, sans-serif;
+  font-size: 38px;
+  letter-spacing: 1px;
+  line-height: 1;
+  margin: 0;
+  text-shadow: 1px 1px 0 #fff0f5;
+}
+
+.site-announcement {
+  background: var(--form-bg);
+  border: 1px solid var(--form-border);
+  color: var(--board-title-color);
+  font-size: 11px;
+  font-weight: bold;
+  margin: 10px auto 0;
+  max-width: 760px;
+  padding: 5px 8px;
+}
+
+.home-container {
+  margin: 0 auto;
+  max-width: 980px;
+}
+
+.site-info,
+.board-directory,
+.site-stats,
+.latest-posts-section {
+  background: var(--form-bg);
+  border: 1px solid var(--form-border);
+  margin: 0 auto 14px;
+  padding: 10px 14px;
+}
+
+.site-info h2,
+.board-directory h2,
+.site-stats p:first-child,
+.latest-posts-section h2 {
+  color: var(--board-title-color);
+  font-family: Tahoma, Arial, sans-serif;
+  font-size: 18px;
+  margin: 0 0 6px;
+}
+
+.site-info p,
+.site-stats p {
+  margin: 4px 0;
+}
+
+.board-directory h2,
+.latest-posts-section h2 {
+  background: #f7dce7;
+  border: 1px solid #f7dce7;
+  color: #16070b;
+  font-size: 16px;
+  margin: -11px -15px 12px;
+  padding: 5px 10px;
+}
+
+.board-categories {
+  display: grid;
+  gap: 18px 28px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.board-category h3 {
+  border-bottom: 1px solid var(--form-border);
+  color: var(--board-title-color);
+  font-size: 13px;
+  font-weight: bold;
+  margin: 0 0 6px;
+  padding-bottom: 3px;
+}
+
+.board-category ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.board-category li {
+  margin: 2px 0;
+}
+
+.board-category a {
+  font-weight: bold;
+  text-decoration: none;
+}
+
+.site-footer {
+  margin: 18px auto 6px;
+  text-align: center;
+}
+
+.site-footer a {
+  font-weight: bold;
+  text-decoration: none;
+}
+
+.site-page-content {
+  line-height: 1.5;
+}
+
+.latest-posts-list {
+  list-style: disc;
+  margin: 8px 0 0;
+  padding-left: 22px;
+}
+
+.latest-posts-list li {
+  margin: 3px 0;
+}
+
+.latest-post-name {
+  color: var(--name-color);
+  font-weight: bold;
+}
+
+/* Admin board management styles. */
+.admin-board-table {
+  border-collapse: collapse;
+  font-size: 12px;
+  width: 100%;
+}
+
+.admin-board-table th,
+.admin-board-table td {
+  border: 1px solid var(--form-border);
+  padding: 5px 6px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.admin-board-table th {
+  background-color: var(--form-label-bg);
+  color: var(--form-label-text);
+  font-weight: bold;
+}
+
+.admin-board-form {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.admin-board-form input[type="text"] {
+  background: #ffffff;
+  border: 1px solid #aaa0aa;
+  font: inherit;
+  padding: 2px 4px;
+  width: auto;
+}
+
+.admin-board-add-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 520px;
+}
+
+.admin-board-add-form label {
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  gap: 3px;
+}
+
+.admin-board-add-form input[type="text"] {
+  background: #ffffff;
+  border: 1px solid #aaa0aa;
+  font: inherit;
+  padding: 3px 5px;
+  width: 100%;
+}
+
+.admin-board-add-form button {
+  align-self: flex-start;
+}
+
+.site-banner-img {
+  display: block;
+  height: auto;
+  margin: 0 auto;
+  max-width: 100%;
+}
+
+.site-top-bar,
+.admin-top-bar {
+  font-size: 11px;
+  padding: 4px 0;
+  text-align: right;
+}
+
+.site-top-bar a,
+.admin-top-bar a {
+  font-weight: bold;
+  margin-right: 10px;
+  text-decoration: none;
+}
+
+.admin-top-bar {
+  margin: 0 auto;
+  max-width: 980px;
+  padding: 4px 10px;
+}
+
+.theme-toggle {
+  background: transparent;
+  border: 1px solid var(--form-border);
+  color: var(--link-color);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 1px 8px;
+}
+
+.theme-toggle:hover {
+  background: var(--form-bg);
+  color: var(--link-hover-color);
+}
+
+.board-extras {
+  position: absolute;
+  right: 0;
+  top: 4px;
+}
+
+.board-extras .theme-toggle {
+  margin-right: 6px;
+}
+
+/* Dark mode overrides. */
+html[data-theme="dark"] {
+  --bg-color: #1a1417;
+  --bg-gradient: none;
+  --text-color: #f0e6ea;
+  --muted-text: #a8909c;
+  --link-color: #8ab4f8;
+  --link-hover-color: #ff8fa3;
+  --board-title-color: #ff8fa3;
+  --subject-color: #8ab4f8;
+  --name-color: #e08da6;
+  --form-label-bg: #7a3b4d;
+  --form-label-text: #f0e6ea;
+  --form-bg: #2a1f24;
+  --form-border: #5a454e;
+  --reply-bg: #25222e;
+  --reply-border: #4a465e;
+  --reply-prefix-color: #6b5b72;
+  --quote-text-color: #a894c7;
+  --quotelink-color: #ff8fa3;
+}
+
+html[data-theme="dark"] body {
+  background: var(--bg-color);
+}
+
+html[data-theme="dark"] input[type="submit"],
+html[data-theme="dark"] button {
+  background: #3a2f35;
+  border-color: #6a5560;
+  color: #f0e6ea;
+}
+
+html[data-theme="dark"] input[type="submit"]:hover,
+html[data-theme="dark"] button:hover {
+  background: #4a3f45;
+}
+
+html[data-theme="dark"] .post-form-table input[type="text"],
+html[data-theme="dark"] .post-form-table textarea,
+html[data-theme="dark"] .reply-form-table input[type="text"],
+html[data-theme="dark"] .reply-form-table textarea,
+html[data-theme="dark"] .post-form-table select,
+html[data-theme="dark"] .reply-form-table select,
+html[data-theme="dark"] .post-form-table input[type="password"],
+html[data-theme="dark"] .reply-form-table input[type="password"],
+html[data-theme="dark"] .delete-form input[type="password"],
+html[data-theme="dark"] .report-control input[type="text"],
+html[data-theme="dark"] .admin-board-form input[type="text"],
+html[data-theme="dark"] .admin-board-add-form input[type="text"],
+html[data-theme="dark"] .admin-ban-form input {
+  background: #221a1d;
+  border-color: #5a454e;
+  color: var(--text-color);
+}
+
+html[data-theme="dark"] .catalog-no-thumb {
+  background: #2a1f24;
+  border-color: var(--reply-border);
+}
+
+html[data-theme="dark"] .catalog-card {
+  background: rgba(37, 34, 46, 0.85);
+}
+
+html[data-theme="dark"] .admin-thread {
+  background: #221a1d;
+}
+
+html[data-theme="dark"] .spoiler {
+  background: #0f0c0e;
+  color: #0f0c0e;
+}
+
+html[data-theme="dark"] .spoiler:hover,
+html[data-theme="dark"] .spoiler:focus {
+  color: #f0e6ea;
+}
+
+@media (max-width: 768px) {
+  .site-banner h1 {
+    font-size: 28px;
+  }
+
+  .board-categories {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-board-form {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }

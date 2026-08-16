@@ -1,11 +1,12 @@
 {
   "name": "chikochan",
   "version": "2.0.0",
-  "description": "A lightweight, JSON-backed Node.js imageboard inspired by Vichan.",
+  "description": "A lightweight MongoDB-backed Node.js imageboard inspired by Vichan.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
+    "migrate:mongo": "node scripts/migrate-to-mongo.js",
     "test": "node --test",
     "check": "node --check server.js && node --check app.js && node --check client.js"
   },
@@ -16,12 +17,13 @@
     "imageboard",
     "vichan",
     "4chan-api",
-    "json"
+    "mongodb"
   ],
   "author": "ChikoChan contributors",
   "license": "ISC",
   "dependencies": {
     "express": "^5.2.1",
+    "mongodb": "^6.21.0",
     "multer": "^2.2.0"
   }
 }

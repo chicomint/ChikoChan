@@ -17,13 +17,15 @@ if (fs.existsSync(ENV_FILE)) {
 const DEFAULTS = {
   host: '0.0.0.0',
   port: 3000,
+  storage: 'mongodb',
+  mongoUrl: '',
+  mongoDbName: '',
   dataDir: '.',
   trustProxy: false,
-  board: {
-    uri: 'chiko',
+  anonymousName: 'Anonymous',
+  site: {
     title: 'ChikoChan',
-    description: 'Welcome to ChikoChan, (off topic) Talk about any! ,no nsfw',
-    anonymousName: 'Anonymous',
+    description: 'A simple imageboard where anyone can post comments and share images.',
     announcement: ''
   },
   limits: {
@@ -128,6 +130,22 @@ function readConfigFile(configPath) {
   }
 }
 
+function loadPages(rootDir) {
+  const pagesDir = path.join(rootDir, 'page');
+  if (!fs.existsSync(pagesDir)) return {};
+
+  const pages = {};
+  for (const filename of fs.readdirSync(pagesDir).sort()) {
+    if (!filename.endsWith('.txt')) continue;
+    const key = filename.slice(0, -4);
+    const routeKey = key === 'rule' ? 'rules' : key;
+    const title = routeKey.charAt(0).toUpperCase() + routeKey.slice(1);
+    const content = fs.readFileSync(path.join(pagesDir, filename), 'utf8');
+    pages[routeKey] = { title, content };
+  }
+  return pages;
+}
+
 function loadConfig(overrides = {}) {
   const configPath = path.resolve(process.env.CHIKO_CONFIG || path.join(ROOT_DIR, 'config.json'));
   const fromFile = readConfigFile(configPath);
@@ -142,6 +160,8 @@ function loadConfig(overrides = {}) {
     host: process.env.HOST || config.host,
     port: envNumber('PORT', config.port),
     dataDir: process.env.DATA_DIR || config.dataDir,
+    mongoUrl: process.env.MONGO_URL || process.env.MONGODB_URI || config.mongoUrl,
+    mongoDbName: process.env.MONGO_DB_NAME || config.mongoDbName,
     trustProxy: envTrustProxy(config.trustProxy),
     limits: {
       postRateWindowMs: envNumber('POST_RATE_WINDOW_MS', config.limits.postRateWindowMs),
@@ -149,15 +169,9 @@ function loadConfig(overrides = {}) {
     }
   });
 
-  const uri = String(config.board.uri || '').trim().toLowerCase();
-  if (!/^[a-z0-9][a-z0-9_-]{0,31}$/.test(uri)) {
-    throw new Error('board.uri must contain only lowercase letters, numbers, underscores, or hyphens.');
-  }
-
-  config.board.uri = uri;
-  config.board.path = `/${uri}/`;
   config.rootDir = ROOT_DIR;
   config.configPath = configPath;
+  config.site.pages = { ...loadPages(config.rootDir), ...(config.site.pages || {}) };
   config.dataDir = path.resolve(ROOT_DIR, config.dataDir);
   config.dataFile = path.join(config.dataDir, 'posts.json');
   config.uploadDir = path.join(config.dataDir, 'src');
@@ -167,6 +181,10 @@ function loadConfig(overrides = {}) {
   config.adminSessionSecret = hasInjectedAdminSecret
     ? String(overrides.adminSessionSecret || '')
     : String(process.env.ADMIN_SESSION_SECRET || '');
+
+  if (!['mongodb', 'json'].includes(config.storage)) {
+    throw new Error('storage must be either "mongodb" or "json".');
+  }
 
   if (!Number.isInteger(config.port) || config.port < 0 || config.port > 65535) {
     throw new Error('port must be an integer between 0 and 65535.');

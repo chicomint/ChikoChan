@@ -41,32 +41,3 @@ ADMIN_PASSWORD=replace-with-a-long-random-password<br>
 ADMIN_SESSION_SECRET=replace-with-a-different-long-random-secret<br>
 and you can access go into http://localhost:3000/admin 
 
-## Migrate posts.json
-
-Set the destination connection string, then run:
-
-```sh
-MONGO_URL='mongodb://...' npm run migrate:mongo
-```
-
-The script creates `posts.json.backup` before connecting, retains `posts.json`, skips IDs already present in MongoDB, and prints inserted/skipped totals. It is safe to run again.
-
-## Railway
-
-For the existing `caring-presence` project, use the app service name reported by `railway status` in place of `<app-service>`:
-
-```sh
-railway link --project caring-presence
-railway add --database mongo
-railway variable set 'MONGO_URL=${{MongoDB.MONGO_URL}}' --service <app-service> --skip-deploys
-railway up --service <app-service>
-railway logs --service <app-service> --lines 100
-```
-
-Run the migration with Railway's service variables available:
-
-```sh
-railway run --service <app-service> npm run migrate:mongo
-```
-
-Railway's normal service filesystem is ephemeral. MongoDB posts persist, but files uploaded into `src/` do not survive redeploys. Use a Railway Volume or external object storage before relying on uploads in production.

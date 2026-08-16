@@ -25,8 +25,13 @@ const DEFAULTS = {
   anonymousName: 'Anonymous',
   site: {
     title: 'ChikoChan',
-    description: 'A simple imageboard where anyone can post comments and share images.',
-    announcement: ''
+    description: 'Welcome to /chiko/!\n' +
+    'This little imageboard is just a place to post whatever\'s on your mind — cute pictures, random thoughts, memes, art, games, hobbies.\n' +
+    'There aren\'t many rules here...\n' +
+    'Be kind, no NSFW, don\'t harass or bully people.\n\n' +
+    'If you\'re making a thread, don\'t worry if it\'s random. /chiko/ can be anything! Just follow the rules!\n\n' +
+    'Feel free to stay and have fun <3',
+    announcement: 'ChikoChan just update? What do you guys think? ^^'
   },
   limits: {
     maxFileBytes: 5 * 1024 * 1024,

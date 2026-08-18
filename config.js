@@ -31,7 +31,7 @@ const DEFAULTS = {
     'Be kind, no NSFW, don\'t harass or bully people.\n\n' +
     'If you\'re making a thread, don\'t worry if it\'s random. /chiko/ can be anything! Just follow the rules!\n\n' +
     'Feel free to stay and have fun <3',
-    announcement: 'ChikoChan just update? What do you guys think? ^^'
+    announcement: ''
   },
   limits: {
     maxFileBytes: 5 * 1024 * 1024,

@@ -302,9 +302,11 @@ hr {
 
 .post-img {
   border: 0;
+  height: auto;
   max-height: 180px;
   max-width: 220px;
   vertical-align: top;
+  width: auto;
 }
 
 .image-box-reply .post-img {
@@ -933,9 +935,19 @@ blockquote.comment {
   display: none;
 }
 
+.image-box.image-expanded {
+  max-width: calc(100vw - 50px);
+}
+
+.image-box.image-expanded .fileThumb {
+  display: block;
+}
+
 .expanded-image .post-img {
+  height: auto;
   max-height: none !important;
-  max-width: none !important;
+  max-width: calc(100vw - 50px) !important;
+  width: auto;
 }
 
 .post-highlighted {
@@ -1166,7 +1178,17 @@ blockquote.comment {
 
   .expanded-image .post-img {
     height: auto;
-    max-width: calc(100vw - 28px) !important;
+    max-width: calc(100vw - 26px) !important;
+  }
+
+  .image-box.image-expanded {
+    margin-left: 0;
+    max-width: calc(100vw - 26px);
+  }
+
+  .reply .expanded-image .post-img,
+  .reply .image-box.image-expanded {
+    max-width: calc(100vw - 58px) !important;
   }
 }
 
@@ -1248,6 +1270,7 @@ blockquote.comment {
 }
 
 .latest-content-grid {
+  align-items: start;
   display: grid;
   gap: 10px;
   grid-template-columns: minmax(300px, 0.9fr) minmax(360px, 1.35fr);

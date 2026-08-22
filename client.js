@@ -207,7 +207,8 @@
         return;
       }
       event.preventDefault();
-      imageLink.classList.toggle('expanded-image');
+      var expanded = imageLink.classList.toggle('expanded-image');
+      if (box) box.classList.toggle('image-expanded', expanded);
       return;
     }
 

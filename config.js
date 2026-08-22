@@ -159,11 +159,12 @@ function loadConfig(overrides = {}) {
   }
   const hasInjectedAdminPassword = Object.hasOwn(overrides, 'adminPassword');
   const hasInjectedAdminSecret = Object.hasOwn(overrides, 'adminSessionSecret');
-  let config = mergeConfig(mergeConfig(DEFAULTS, fromFile), overrides);
+  let config = mergeConfig(DEFAULTS, fromFile);
 
   config = mergeConfig(config, {
     host: process.env.HOST || config.host,
     port: envNumber('PORT', config.port),
+    storage: process.env.STORAGE || config.storage,
     dataDir: process.env.DATA_DIR || config.dataDir,
     mongoUrl: process.env.MONGO_URL || process.env.MONGODB_URI || config.mongoUrl,
     mongoDbName: process.env.MONGO_DB_NAME || config.mongoDbName,
@@ -173,6 +174,7 @@ function loadConfig(overrides = {}) {
       postRateLimit: envNumber('POST_RATE_LIMIT', config.limits.postRateLimit)
     }
   });
+  config = mergeConfig(config, overrides);
 
   config.rootDir = ROOT_DIR;
   config.configPath = configPath;

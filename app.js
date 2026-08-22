@@ -174,8 +174,9 @@ function createApp(overrides = {}) {
     const data = service.getData();
     const boards = service.getBoards(data);
     const siteStats = service.getSiteStats(data);
-    const latestPosts = service.latestPosts(50, data);
-    response.send(renderer.home(data, boards, siteStats, latestPosts));
+    const latestPosts = service.latestPosts(30, data);
+    const latestImages = service.latestImages(24, data);
+    response.send(renderer.home(data, boards, siteStats, latestPosts, latestImages));
   }
 
   app.get(['/', '/index.html'], renderHome);

@@ -3,4 +3,4 @@ posts.json
 posts.json.backup
 src/
 node_modules/
-
+/data/

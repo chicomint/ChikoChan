@@ -11,6 +11,7 @@ const ONE_PIXEL_PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
   'base64'
 );
+const ONE_PIXEL_GIF = Buffer.from('R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==', 'base64');
 
 async function testServer(t, overrides = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'chikochan-http-'));
@@ -44,6 +45,7 @@ async function createThread(url, values = {}) {
   form.set('sub', values.subject || 'Test thread');
   form.set('com', values.comment || 'Opening post');
   form.set('pwd', values.password || 'op-password');
+  if (values.fortune) form.set('fortune', values.fortune);
   form.set('upfile', new Blob([ONE_PIXEL_PNG], { type: 'image/png' }), 'pixel.png');
   const response = await fetch(`${url}/post?json=1`, { method: 'POST', body: form });
   const body = await response.text();
@@ -57,6 +59,19 @@ async function createReply(url, threadId, comment, password = 'reply-password') 
   form.set('name', 'Bob');
   form.set('com', comment);
   form.set('pwd', password);
+  const response = await fetch(`${url}/post?json=1`, { method: 'POST', body: form });
+  const body = await response.text();
+  assert.equal(response.status, 201, body);
+  return JSON.parse(body);
+}
+
+async function createImageReply(url, threadId, comment = 'image reply') {
+  const form = new FormData();
+  form.set('resto', String(threadId));
+  form.set('name', 'Image poster');
+  form.set('com', comment);
+  form.set('pwd', 'image-reply-password');
+  form.set('upfile', new Blob([ONE_PIXEL_GIF], { type: 'image/gif' }), 'pixel.gif');
   const response = await fetch(`${url}/post?json=1`, { method: 'POST', body: form });
   const body = await response.text();
   assert.equal(response.status, 201, body);
@@ -84,6 +99,12 @@ test('posts through compatibility fields and keeps backlinks in JSON', async t =
   const html = await page.text();
   assert.equal(page.status, 200);
   assert.match(html, new RegExp(`class="backlink quotelink"[^>]+data-post-id="${reply.id}"`));
+  const opHeaderStart = html.indexOf(`id="pi${thread.id}"`);
+  const opHeaderEnd = html.indexOf('</div>', opHeaderStart);
+  const firstBacklink = html.indexOf(`data-post-id="${reply.id}"`, opHeaderStart);
+  assert.ok(opHeaderStart >= 0 && firstBacklink < opHeaderEnd, 'backlink should be inside the post header');
+  assert.doesNotMatch(html, /Replies:/);
+  assert.match(html, new RegExp(`class="quotelink" href="#p${thread.id}" data-post-id="${thread.id}"`));
   assert.match(html, /class="postContainer opContainer"/);
   assert.match(html, /class="comment op-comment postMessage"/);
 });
@@ -182,9 +203,12 @@ test('file-only deletion retains the post and removes its upload', async t => {
   assert.equal(after.threads[0].imageDeleted, true);
   assert.equal(after.threads[0].image, undefined);
   assert.equal(fs.existsSync(uploadPath), false);
+
+  const homeHtml = await fetch(server.url).then(result => result.text());
+  assert.doesNotMatch(homeHtml, /class="latest-image-link"/);
 });
 
-test('#fortune name prepends a greentext fortune and hides the keyword', async t => {
+test('#fortune stores trusted metadata and renders a server-only fortune element', async t => {
   const server = await testServer(t, {
     features: { fortunes: true },
     fortunes: ['Good news will come to you by mail.', 'Bad Luck.']
@@ -195,7 +219,8 @@ test('#fortune name prepends a greentext fortune and hides the keyword', async t
   const op = stored.threads[0];
   assert.equal(op.name, 'Anonymous');
   assert.equal(op.trip, '');
-  assert.match(op.comment, /^>Your fortune: (Good news will come to you by mail\.|Bad Luck\.)\ntell my fortune$/);
+  assert.equal(op.comment, 'tell my fortune');
+  assert.match(op.fortune, /^(Good news will come to you by mail\.|Bad Luck\.)$/);
 
   const replyForm = new FormData();
   replyForm.set('resto', String(thread.id));
@@ -209,14 +234,53 @@ test('#fortune name prepends a greentext fortune and hides the keyword', async t
   const replyStored = JSON.parse(fs.readFileSync(path.join(server.directory, 'posts.json'), 'utf8'));
   const storedReply = replyStored.threads[0].replies.find(item => item.id === reply.id);
   assert.equal(storedReply.name, 'Anonymous');
-  assert.match(storedReply.comment, /^>Your fortune: (Good news will come to you by mail\.|Bad Luck\.)\nreply comment$/);
+  assert.equal(storedReply.comment, 'reply comment');
+  assert.match(storedReply.fortune, /^(Good news will come to you by mail\.|Bad Luck\.)$/);
 
   const page = await fetch(`${server.url}/chiko/thread/${thread.id}`);
   const html = await page.text();
   assert.equal(page.status, 200);
-  assert.match(html, /<span class="greentext">&gt;Your fortune: /);
+  assert.match(html, /<span class="fortune" title="Server-generated fortune">Your fortune: /);
+  assert.doesNotMatch(html, /<span class="greentext">&gt;Your fortune: /);
   assert.doesNotMatch(html, /#fortune/);
   assert.doesNotMatch(html, /Alice/);
+
+  const threadApi = await fetch(`${server.url}/chiko/thread/${thread.id}.json`).then(response => response.json());
+  assert.equal(threadApi.posts[0].fortune, op.fortune);
+  assert.match(threadApi.posts[0].com, /class="fortune"/);
+});
+
+test('typed fortune imitations remain ordinary escaped greentext', async t => {
+  const server = await testServer(t, { fortunes: ['Server result.'] });
+  const thread = await createThread(server.url, {
+    comment: '>Your fortune: Bad Luck\n>ordinary greentext\n<span class="fortune">forged</span>',
+    fortune: 'Forged metadata.'
+  });
+
+  const stored = JSON.parse(fs.readFileSync(path.join(server.directory, 'posts.json'), 'utf8'));
+  assert.equal(stored.threads[0].fortune, undefined);
+
+  const html = await fetch(`${server.url}/chiko/thread/${thread.id}`).then(response => response.text());
+  assert.match(html, /<span class="greentext">&gt;Your fortune: Bad Luck<\/span>/);
+  assert.match(html, /<span class="greentext">&gt;ordinary greentext<\/span>/);
+  assert.match(html, /&lt;span class=&quot;fortune&quot;&gt;forged&lt;\/span&gt;/);
+  assert.doesNotMatch(html, /class="fortune"/);
+});
+
+test('homepage shows compact recent posts and deduplicated valid image links', async t => {
+  const server = await testServer(t);
+  const first = await createThread(server.url, { subject: 'First image' });
+  const second = await createThread(server.url, { subject: 'Duplicate image' });
+  const imageReply = await createImageReply(server.url, first.id);
+
+  const html = await fetch(server.url).then(response => response.text());
+  assert.match(html, /<h2>Latest Images<\/h2>/);
+  assert.match(html, /<h2>Latest Posts<\/h2>/);
+  assert.match(html, new RegExp(`class="latest-image-link" href="/chiko/thread/${first.id}#p${imageReply.id}"`));
+  assert.match(html, new RegExp(`class="latest-post-reference" href="/chiko/thread/${first.id}#p${first.id}"`));
+  assert.equal((html.match(/class="latest-image-link"/g) || []).length, 2);
+  assert.equal((html.match(/class="latest-post-reference"/g) || []).length, 3);
+  assert.match(html, new RegExp(`href="/chiko/thread/(?:${first.id}|${second.id})#p(?:${first.id}|${second.id})"`));
 });
 
 test('#fortune as a tripcode password still produces a tripcode', async t => {

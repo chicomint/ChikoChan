@@ -1,10 +1,11 @@
 {
   "name": "chikochan",
   "version": "2.0.0",
-  "description": "A lightweight MongoDB-backed Node.js imageboard inspired by Vichan.",
+  "description": "A lightweight Node.js imageboard inspired by Vichan.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "start:local": "node scripts/start-local.js",
     "dev": "node --watch server.js",
     "migrate:mongo": "node scripts/migrate-to-mongo.js",
     "test": "node --test",

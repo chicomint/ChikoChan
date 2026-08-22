@@ -93,6 +93,12 @@ test('boards are isolated and appear on the homepage', async t => {
 
   const gThread = await createThread(server.url, 'g', 'Tech thread');
   const aThread = await createThread(server.url, 'a', 'Anime thread');
+  const crossBoardForm = new FormData();
+  crossBoardForm.set('resto', String(gThread.id));
+  crossBoardForm.set('com', `Cross-board quote: >>${aThread.id}`);
+  crossBoardForm.set('pwd', 'reply-password');
+  const crossBoardResponse = await fetch(`${server.url}/g/post?json=1`, { method: 'POST', body: crossBoardForm });
+  assert.equal(crossBoardResponse.status, 201, await crossBoardResponse.text());
 
   const home = await fetch(server.url);
   const homeHtml = await home.text();
@@ -100,7 +106,7 @@ test('boards are isolated and appear on the homepage', async t => {
   assert.match(homeHtml, /Interests/);
   assert.match(homeHtml, /\/g\//);
   assert.match(homeHtml, /\/a\//);
-  assert.match(homeHtml, /Total posts: 2/);
+  assert.match(homeHtml, /Total posts: 3/);
 
   const gPage = await fetch(`${server.url}/g/`);
   const gHtml = await gPage.text();
@@ -115,12 +121,16 @@ test('boards are isolated and appear on the homepage', async t => {
   assert.doesNotMatch(aHtml, /Tech thread/);
 
   const gThreadPage = await fetch(`${server.url}/g/thread/${gThread.threadId}`);
+  const gThreadHtml = await gThreadPage.text();
   assert.equal(gThreadPage.status, 200);
-  assert.match(await gThreadPage.text(), /Tech thread body/);
+  assert.match(gThreadHtml, /Tech thread body/);
+  assert.match(gThreadHtml, new RegExp(`href="/a/thread/${aThread.id}#p${aThread.id}"`));
 
   const aThreadPage = await fetch(`${server.url}/a/thread/${aThread.threadId}`);
+  const aThreadHtml = await aThreadPage.text();
   assert.equal(aThreadPage.status, 200);
-  assert.match(await aThreadPage.text(), /Anime thread body/);
+  assert.match(aThreadHtml, /Anime thread body/);
+  assert.match(aThreadHtml, new RegExp(`href="/g/thread/${gThread.id}#p${gThread.id + 2}"`));
 
   const boards = await fetch(`${server.url}/boards.json`).then(r => r.json());
   const uris = boards.boards.map(board => board.board);

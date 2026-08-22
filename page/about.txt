@@ -1,12 +1,10 @@
 # About
-
 Hi there! Welcome to ChikoChan:3
 ChikoChan it is simple Imageboard that using my own custom software:
 
 https://github.com/chicomint/ChikoChan
 
 You can post whatever is on your mind — pictures, random thoughts, memes, art, games, hobbies, and more!
-
 Some boards have specific topics or categories, so please make sure your posts belong on that board and follow the rules:
 
 https://boards.chiko.cc/rules
@@ -15,7 +13,7 @@ Feel free to stay and have fun! ^-^
 
 ## History
 ChikoChan was started by me on **June 20, 2026**, inspired by imageboards such as 4chan and others.
-At first, ChikoChan didn't even have a homepage. It only had **/chiko/**, which was the very first board.
+At first, ChikoChan didn't even have a homepage, it only had **/chiko/**, which was very first board.
 A few weeks after opening, the site started receiving a lot of spam posts. You can read more about what happened here:
 
 **https://chiko.cc/all_blog#:~:text=someone%20try,protection**
@@ -23,12 +21,11 @@ A few weeks after opening, the site started receiving a lot of spam posts. You c
 And yeah... that's pretty much the story of ChikoChan so far.
 
 # FAQ
-
 ### What is an imageboard?
 An imageboard is a type of online forum where people can create threads, post images, and reply to other posts. Don't need an account.
 
 ### What is a fortune?
-A fortune is a small random message or result that can appear in a post when using the fortune feature.
+fortune is a random message that appear in a post when using the fortune feature. By typeing #fortune on the Name box.
 
 ### What is sage?
 Sage lets you reply to a thread without bumping it back to the top of the board.

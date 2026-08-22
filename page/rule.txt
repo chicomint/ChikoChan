@@ -1,9 +1,15 @@
-#rule
--Please ensure that your posts comply with the site's rules and U.S. laws.
--be nice, no NSFW, don't harass or bully people, Do not post you'r and other people personal information
-, No spamming
-#Privacy Policy
--We not keep you ip address
--We only keep the thread and post ,date/time that you posted
+# Rules
 
-upated 07/22/2026
+-Please make sure all posts follow the site rules and applicable U.S. laws.
+-Be respectful and kind to others.
+-No NSFW content.
+-Do not harass, threaten, or bully other users.
+-Do not post your own or someone else's private or personal information.
+-No spam or excessive repeated posts.
+
+# Privacy Policy
+
+-We do not store your IP address.
+-We only store the content of threads and posts, along with the date and time they were posted.
+
+Updated: July 22, 2026**

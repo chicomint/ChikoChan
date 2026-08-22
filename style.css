@@ -1422,6 +1422,32 @@ blockquote.comment {
   font-weight: bold;
 }
 
+.admin-board-actions,
+.admin-board-order {
+  align-items: flex-start;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+.admin-board-actions {
+  max-width: 150px;
+}
+
+.admin-board-order {
+  flex-basis: 100%;
+}
+
+.admin-board-order button {
+  padding-left: 6px;
+  padding-right: 6px;
+}
+
+.admin-board-order button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
 .admin-board-form {
   align-items: center;
   display: flex;

@@ -458,6 +458,16 @@ function createApp(overrides = {}) {
     }
   });
 
+  app.post('/admin/boards/move', requireAdmin, async (request, response, next) => {
+    try {
+      requireCsrf(request);
+      await service.moveBoard(request.body.uri, request.body.direction);
+      response.redirect(303, '/admin/boards');
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.post('/admin/boards/delete', requireAdmin, async (request, response, next) => {
     try {
       requireCsrf(request);

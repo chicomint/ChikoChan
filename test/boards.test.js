@@ -138,6 +138,43 @@ test('boards are isolated and appear on the homepage', async t => {
   assert.ok(uris.includes('a'));
 });
 
+test('admin can move boards up and down and the homepage keeps that order', async t => {
+  const server = await testServer(t);
+  const cookie = await adminCookie(server.url);
+  await addBoard(server.url, cookie, { uri: 'g', name: 'Technology', category: 'Interests' });
+  await addBoard(server.url, cookie, { uri: 'v', name: 'Video Games', category: 'Interests' });
+
+  const boardsPage = await fetch(`${server.url}/admin/boards`, { headers: { cookie } });
+  const boardsHtml = await boardsPage.text();
+  const csrf = /name="csrf" value="([^"]+)"/.exec(boardsHtml)?.[1];
+  assert.equal(boardsPage.status, 200);
+  assert.ok(csrf);
+  assert.match(boardsHtml, /action="\/admin\/boards\/move"/);
+
+  async function move(uri, direction) {
+    return fetch(`${server.url}/admin/boards/move`, {
+      method: 'POST',
+      redirect: 'manual',
+      headers: { 'content-type': 'application/x-www-form-urlencoded', cookie },
+      body: new URLSearchParams({ csrf, uri, direction })
+    });
+  }
+
+  assert.deepEqual(server.app.locals.chikochan.service.getData().boards.map(board => board.uri), ['chiko', 'g', 'v']);
+  assert.equal((await move('v', 'up')).status, 303);
+  assert.deepEqual(server.app.locals.chikochan.service.getData().boards.map(board => board.uri), ['chiko', 'v', 'g']);
+
+  let homeHtml = await fetch(server.url).then(response => response.text());
+  assert.ok(homeHtml.indexOf('/v/') < homeHtml.indexOf('/g/'));
+
+  assert.equal((await move('v', 'up')).status, 303);
+  assert.deepEqual(server.app.locals.chikochan.service.getData().boards.map(board => board.uri), ['v', 'chiko', 'g']);
+  homeHtml = await fetch(server.url).then(response => response.text());
+  assert.ok(homeHtml.indexOf('Interests') < homeHtml.indexOf('General'));
+
+  assert.equal((await move('v', 'sideways')).status, 400);
+});
+
 test('reserved and duplicate board URIs are rejected', async t => {
   const server = await testServer(t);
   const cookie = await adminCookie(server.url);

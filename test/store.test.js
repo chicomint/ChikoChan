@@ -6,7 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { loadConfig } = require('../config');
-const { JsonStore } = require('../lib/store');
+const { JsonStore, SCHEMA_VERSION } = require('../lib/store');
 
 function temporaryDirectory(t) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'chikochan-store-'));
@@ -32,7 +32,7 @@ test('migrates legacy data and stores references and backlinks', t => {
   const store = new JsonStore(config);
   const data = store.read();
 
-  assert.equal(data.version, 3);
+  assert.equal(data.version, SCHEMA_VERSION);
   assert.equal(data.lastId, 11);
   assert.ok(data.meta.siteSecret.length >= 32);
   assert.deepEqual(data.threads[0].replies[0].references, [10]);

@@ -34,10 +34,10 @@ Sage lets you reply to a thread without bumping it back to the top of the board.
 Yes! You can delete your own posts by selecting the checkbox next to the post, then clicking the Remove button at the bottom-right of the page.
 If you set a password when making the post, enter that password to delete it. If you didn't set one, ChikoChan usually creates a password automatically, so you can normally just click Delete. ^-^
 
-### What is the pink text?
-Pink text is ChikoChan's version of **greentext**, a style commonly used on imageboards such as 4chan.
+### What is the purple text?
+purple text is ChikoChan's version of **greentext**, a style commonly used on imageboards such as 4chan.
 Greentext is text that appears green when a line starts with `>`. People often use it for story, jokes, or describing something that happened.
-On ChikoChan, it works the same way, except the text appears **pink** instead of green.
+On ChikoChan, it works the same way, except the text appears **purple** instead of green.
 
 :p
 

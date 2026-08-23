@@ -197,4 +197,246 @@ test('reserved and duplicate board URIs are rejected', async t => {
     body: new URLSearchParams({ csrf, uri: 'admin', name: 'Reserved', category: 'Other', enabled: '1' })
   });
   assert.equal(reserved.status, 400);
+
+  const reservedPage = await fetch(`${server.url}/admin/boards/add`, {
+    method: 'POST',
+    redirect: 'manual',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', cookie },
+    body: new URLSearchParams({ csrf, uri: 'rules', name: 'Conflicting rules board', category: 'Other', enabled: '1' })
+  });
+  assert.equal(reservedPage.status, 400);
+});
+
+test('admin manages escaped per-board rules exposed through HTML and JSON', async t => {
+  const server = await testServer(t);
+  const cookie = await adminCookie(server.url);
+  const adminRules = await fetch(`${server.url}/admin/boards/chiko/rules`, { headers: { cookie } });
+  const adminRulesHtml = await adminRules.text();
+  const csrf = /name="csrf" value="([^"]+)"/.exec(adminRulesHtml)?.[1];
+  assert.equal(adminRules.status, 200);
+  assert.ok(csrf);
+
+  const originalText = 'Be kind <script>alert("x")</script>\nNo spam.';
+  const add = await fetch(`${server.url}/admin/boards/rules/add`, {
+    method: 'POST',
+    redirect: 'manual',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', cookie },
+    body: new URLSearchParams({ csrf, uri: 'chiko', text: originalText })
+  });
+  assert.equal(add.status, 303, await add.text());
+
+  const storedRule = server.app.locals.chikochan.service.getData().boards[0].rules[0];
+  assert.equal(storedRule.text, originalText);
+  assert.match(storedRule.id, /^[a-f0-9-]{36}$/);
+  assert.match(add.headers.get('location'), new RegExp(`^/admin/boards/chiko/rules#rule-${storedRule.id}$`));
+
+  const publicRules = await fetch(`${server.url}/chiko/rules`);
+  const publicRulesHtml = await publicRules.text();
+  assert.equal(publicRules.status, 200);
+  assert.match(publicRulesHtml, /Be kind &lt;script&gt;alert\(&quot;x&quot;\)&lt;\/script&gt;<br>No spam\./);
+  assert.doesNotMatch(publicRulesHtml, /<script>alert/);
+  assert.match(publicRulesHtml, /href="\/rules">global rules<\/a>/);
+
+  const legacyHtmlPath = await fetch(`${server.url}/chiko/rules.html`);
+  assert.equal(legacyHtmlPath.status, 200);
+  const rulesJsonResponse = await fetch(`${server.url}/chiko/rules.json`);
+  assert.equal(rulesJsonResponse.status, 200);
+  assert.deepEqual(await rulesJsonResponse.json(), [originalText]);
+  assert.equal((await fetch(`${server.url}/rules`)).status, 200);
+
+  const duplicate = await fetch(`${server.url}/admin/boards/rules/add`, {
+    method: 'POST',
+    redirect: 'manual',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', cookie },
+    body: new URLSearchParams({ csrf, uri: 'chiko', text: originalText })
+  });
+  assert.equal(duplicate.status, 409);
+
+  const tooLong = await fetch(`${server.url}/admin/boards/rules/add`, {
+    method: 'POST',
+    redirect: 'manual',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', cookie },
+    body: new URLSearchParams({ csrf, uri: 'chiko', text: 'x'.repeat(513) })
+  });
+  assert.equal(tooLong.status, 400);
+
+  const missingCsrf = await fetch(`${server.url}/admin/boards/rules/edit`, {
+    method: 'POST',
+    redirect: 'manual',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', cookie },
+    body: new URLSearchParams({ uri: 'chiko', ruleId: storedRule.id, text: 'Unauthorized edit' })
+  });
+  assert.equal(missingCsrf.status, 403);
+  assert.equal(server.app.locals.chikochan.service.getData().boards[0].rules[0].text, originalText);
+
+  const edit = await fetch(`${server.url}/admin/boards/rules/edit`, {
+    method: 'POST',
+    redirect: 'manual',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', cookie },
+    body: new URLSearchParams({ csrf, uri: 'chiko', ruleId: storedRule.id, text: 'Stay on topic.' })
+  });
+  assert.equal(edit.status, 303, await edit.text());
+  assert.deepEqual(await fetch(`${server.url}/chiko/rules.json`).then(response => response.json()), ['Stay on topic.']);
+
+  const remove = await fetch(`${server.url}/admin/boards/rules/delete`, {
+    method: 'POST',
+    redirect: 'manual',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', cookie },
+    body: new URLSearchParams({ csrf, uri: 'chiko', ruleId: storedRule.id })
+  });
+  assert.equal(remove.status, 303, await remove.text());
+  assert.deepEqual(await fetch(`${server.url}/chiko/rules.json`).then(response => response.json()), []);
+
+  const actions = server.app.locals.chikochan.service.getData().moderationLog.map(entry => entry.action);
+  assert.deepEqual(actions.slice(-3), ['board-rule-add', 'board-rule-edit', 'board-rule-delete']);
+});
+
+test('structured customization and board policies stay escaped, typed, and board-scoped', async t => {
+  const server = await testServer(t);
+  const cookie = await adminCookie(server.url);
+  const customizationPage = await fetch(`${server.url}/admin/customization`, { headers: { cookie } });
+  const customizationHtml = await customizationPage.text();
+  const csrf = /name="csrf" value="([^"]+)"/.exec(customizationHtml)?.[1];
+  assert.equal(customizationPage.status, 200);
+  assert.ok(csrf);
+
+  const adminPost = (route, values) => fetch(`${server.url}${route}`, {
+    method: 'POST',
+    redirect: 'manual',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', cookie },
+    body: new URLSearchParams({ csrf, ...values })
+  });
+
+  const missingCsrf = await fetch(`${server.url}/admin/customization`, {
+    method: 'POST',
+    redirect: 'manual',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', cookie },
+    body: new URLSearchParams({ title: 'Unauthorized' })
+  });
+  assert.equal(missingCsrf.status, 403);
+
+  const unsafePath = await adminPost('/admin/customization', {
+    title: 'Unsafe',
+    logoPath: 'javascript:alert(1)',
+    navigation: '',
+    theme_background: '#112233'
+  });
+  assert.equal(unsafePath.status, 400);
+
+  const unsafeNavigation = await adminPost('/admin/customization', {
+    title: 'Unsafe',
+    logoPath: '',
+    faviconPath: '',
+    navigation: 'Outside | https://example.com'
+  });
+  assert.equal(unsafeNavigation.status, 400);
+
+  const customize = await adminPost('/admin/customization', {
+    title: 'Chiko <script>alert(1)</script>',
+    description: 'A safe <b>description</b>',
+    announcement: 'Announcement <img src=x onerror=alert(1)>',
+    footerText: 'Footer <strong>text</strong>',
+    logoPath: '/banner.png',
+    faviconPath: '/chikki.ico',
+    navigation: 'FAQ | /pages/faq',
+    theme_background: '#112233',
+    theme_replyBackground: '#ddeeff'
+  });
+  assert.equal(customize.status, 303, await customize.text());
+
+  const addPageResponse = await adminPost('/admin/customization/pages/add', {
+    slug: 'faq',
+    title: 'Frequently <asked>',
+    content: 'Plain text only\n<script>alert("page")</script>',
+    showInFooter: '1'
+  });
+  assert.equal(addPageResponse.status, 303, await addPageResponse.text());
+
+  const [homeHtml, customPageHtml, customCss] = await Promise.all([
+    fetch(server.url).then(response => response.text()),
+    fetch(`${server.url}/pages/faq`).then(response => response.text()),
+    fetch(`${server.url}/custom.css`).then(response => response.text())
+  ]);
+  assert.match(homeHtml, /Chiko &lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+  assert.match(homeHtml, /href="\/pages\/faq"/);
+  assert.match(homeHtml, /Footer &lt;strong&gt;text&lt;\/strong&gt;/);
+  assert.doesNotMatch(homeHtml, /<img src=x onerror/);
+  assert.match(customPageHtml, /&lt;script&gt;alert\(&quot;page&quot;\)&lt;\/script&gt;/);
+  assert.doesNotMatch(customPageHtml, /<script>alert\("page"\)<\/script>/);
+  assert.match(customCss, /:root\{[^}]*--bg-color:#112233/);
+  assert.match(customCss, /--reply-bg:#ddeeff/);
+  assert.doesNotMatch(customCss, /javascript|<script/i);
+
+  const settingsPage = await fetch(`${server.url}/admin/boards/chiko/settings`, { headers: { cookie } });
+  assert.equal(settingsPage.status, 200);
+  const settings = await adminPost('/admin/boards/edit', {
+    uri: 'chiko',
+    settingsForm: '1',
+    requireImageForThread: '0',
+    allowVideoUploads: '0',
+    allowSpoilers: '0',
+    showPosterIds: '1',
+    allowSage: '0',
+    rejectDuplicateImages: '',
+    anonymousName: 'BoardAnon',
+    maxThreads: '1',
+    bumpLimit: '2',
+    replyLimit: '3',
+    maxFilesPerPost: '2',
+    bannerText: 'Banner <script>unsafe</script>',
+    bannerPath: '',
+    boardTheme_replyBackground: '#abcdef'
+  });
+  assert.equal(settings.status, 303, await settings.text());
+
+  async function textThread(subject) {
+    const form = new FormData();
+    form.set('sub', subject);
+    form.set('com', `${subject} body`);
+    const response = await fetch(`${server.url}/chiko/post?json=1`, { method: 'POST', body: form });
+    const body = await response.text();
+    assert.equal(response.status, 201, body);
+    return JSON.parse(body);
+  }
+
+  const first = await textThread('First policy thread');
+  const second = await textThread('Second policy thread');
+  const data = server.app.locals.chikochan.service.getData();
+  assert.equal(data.boards[0].settings.requireImageForThread, false);
+  assert.equal(data.boards[0].settings.allowVideoUploads, false);
+  assert.equal(data.boards[0].settings.showPosterIds, true);
+  assert.equal(data.boards[0].settings.maxFilesPerPost, 2);
+  assert.equal(data.threads.find(thread => thread.id === first.id).archived, true);
+  assert.equal(data.threads.find(thread => thread.id === second.id).name, 'BoardAnon');
+  assert.ok(data.threads.find(thread => thread.id === second.id).posterId);
+
+  const sage = new FormData();
+  sage.set('resto', String(second.id));
+  sage.set('com', 'Disallowed sage');
+  sage.set('email', 'sage');
+  const sageResponse = await fetch(`${server.url}/chiko/post?json=1`, { method: 'POST', body: sage });
+  assert.equal(sageResponse.status, 403);
+
+  const spoiler = new FormData();
+  spoiler.set('com', 'Disallowed spoiler');
+  spoiler.set('spoiler', '1');
+  spoiler.set('upfile', new Blob([ONE_PIXEL_PNG], { type: 'image/png' }), 'spoiler.png');
+  const spoilerResponse = await fetch(`${server.url}/chiko/post?json=1`, { method: 'POST', body: spoiler });
+  assert.equal(spoilerResponse.status, 403);
+
+  const [boardPageHtml, boardCss, archiveIds, boardsApi] = await Promise.all([
+    fetch(`${server.url}/chiko/`).then(response => response.text()),
+    fetch(`${server.url}/custom.css`).then(response => response.text()),
+    fetch(`${server.url}/chiko/archive.json`).then(response => response.json()),
+    fetch(`${server.url}/boards.json`).then(response => response.json())
+  ]);
+  assert.doesNotMatch(boardPageHtml, /sage \(do not bump\)/);
+  assert.doesNotMatch(boardPageHtml, /name="spoiler"/);
+  assert.match(boardPageHtml, /Banner &lt;script&gt;unsafe&lt;\/script&gt;/);
+  assert.doesNotMatch(boardPageHtml, /First policy thread/);
+  assert.match(boardCss, /body\[data-board="chiko"\]\{--reply-bg:#abcdef/);
+  assert.deepEqual(archiveIds, [first.id]);
+  assert.equal(boardsApi.boards[0].max_webm_filesize, 0);
+  assert.equal(boardsApi.boards[0].user_ids, 1);
+  assert.equal(boardsApi.boards[0].max_files_per_post, 2);
 });

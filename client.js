@@ -132,7 +132,7 @@
     preview = source.cloneNode(true);
     preview.removeAttribute('id');
     preview.querySelectorAll('[id]').forEach(function (node) { node.removeAttribute('id'); });
-    preview.querySelectorAll('form, .report-control, .delete, .post-hide-button').forEach(function (node) { node.remove(); });
+    preview.querySelectorAll('form, .post-menu, .delete, .post-hide-button').forEach(function (node) { node.remove(); });
     preview.classList.add('quote-preview');
     document.body.appendChild(preview);
     var left = Math.min(event.clientX + 14, window.innerWidth - preview.offsetWidth - 8);
@@ -186,6 +186,45 @@
     });
   }
 
+  function renderTurnstile(form) {
+    var container = form && form.querySelector('[data-turnstile-widget]');
+    if (!container || container.dataset.widgetId) return container;
+    var status = container.querySelector('.captcha-status');
+    if (!window.turnstile || typeof window.turnstile.render !== 'function') {
+      if (status) status.textContent = 'Human verification could not load. Check your connection and refresh.';
+      return container;
+    }
+    try {
+      if (status) status.textContent = 'Loading human verification…';
+      var widgetId = window.turnstile.render(container, {
+        sitekey: container.dataset.sitekey,
+        action: container.dataset.action || 'post',
+        theme: 'auto',
+        appearance: 'interaction-only',
+        'response-field': true,
+        'response-field-name': 'cf-turnstile-response'
+      });
+      container.dataset.widgetId = String(widgetId);
+      if (status && status.isConnected) status.remove();
+    } catch (error) {
+      container.textContent = 'Human verification could not load. Refresh and try again.';
+    }
+    return container;
+  }
+
+  function initializeTurnstile() {
+    document.querySelectorAll('form[data-turnstile-form]').forEach(function (form) {
+      form.addEventListener('focusin', function () { renderTurnstile(form); }, { once: true });
+      form.addEventListener('pointerdown', function () { renderTurnstile(form); }, { once: true });
+      var details = form.closest('details');
+      if (details) {
+        details.addEventListener('toggle', function () {
+          if (details.open) renderTurnstile(form);
+        });
+      }
+    });
+  }
+
   document.addEventListener('click', function (event) {
     if (event.target.closest('.theme-toggle')) {
       toggleTheme();
@@ -209,6 +248,16 @@
       event.preventDefault();
       var expanded = imageLink.classList.toggle('expanded-image');
       if (box) box.classList.toggle('image-expanded', expanded);
+      var image = imageLink.querySelector('[data-expand-image]');
+      if (image) image.src = expanded ? image.dataset.fullSrc : image.dataset.thumbnailSrc;
+      return;
+    }
+
+    var spoilerButton = event.target.closest('[data-reveal-spoiler]');
+    if (spoilerButton) {
+      var spoilerBox = spoilerButton.closest('.spoiler-image');
+      if (spoilerBox) spoilerBox.classList.add('spoiler-revealed');
+      spoilerButton.remove();
       return;
     }
 
@@ -233,6 +282,11 @@
   });
 
   document.addEventListener('submit', function (event) {
+    var confirmation = event.target.dataset.confirm;
+    if (confirmation && !window.confirm(confirmation)) {
+      event.preventDefault();
+      return;
+    }
     if (event.target.id === 'delete-form') {
       var selectedPost = Array.from(event.target.elements).some(function (control) {
         return control.name === 'postIds' && control.checked;
@@ -240,6 +294,19 @@
       if (!selectedPost) {
         event.preventDefault();
         window.alert('Select at least one post first.');
+        return;
+      }
+    }
+    if (event.target.matches('form[data-turnstile-form]')) {
+      var token = event.target.querySelector('input[name="cf-turnstile-response"]');
+      if (!token || !token.value) {
+        event.preventDefault();
+        var captcha = renderTurnstile(event.target);
+        if (captcha) {
+          var message = captcha.querySelector('.captcha-status');
+          if (message) message.textContent = 'Complete human verification before posting.';
+          captcha.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        }
         return;
       }
     }
@@ -257,6 +324,7 @@
     initializePasswords();
     initializeHiddenPosts();
     initializeCatalogFilter();
+    initializeTurnstile();
     highlightHash();
     var params = new URLSearchParams(window.location.search);
     var quoteId = params.get('quote') || params.get('q');

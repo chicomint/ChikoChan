@@ -8,6 +8,7 @@
     "start:local": "node scripts/start-local.js",
     "dev": "node --watch server.js",
     "migrate:mongo": "node scripts/migrate-to-mongo.js",
+    "diagnose": "node scripts/diagnose.js",
     "test": "node --test",
     "check": "node --check server.js && node --check app.js && node --check client.js"
   },

@@ -3,13 +3,14 @@
 const { createApp } = require('./app');
 
 const app = createApp();
-const { config, store } = app.locals.chikochan;
+const { config, maintenance, store } = app.locals.chikochan;
 const { host, port } = config;
 let shuttingDown = false;
 let server;
 
 async function start() {
   await store.ready;
+  maintenance.start();
   server = app.listen(port, host, error => {
     if (error) {
       console.error(`Could not start ChikoChan: ${error.message}`);
@@ -27,7 +28,7 @@ function shutdown(signal) {
   console.log(`${signal} received; closing the HTTP server.`);
 
   if (!server) {
-    void store.close?.().finally(() => process.exit());
+    void maintenance.stop().then(() => store.close?.()).finally(() => process.exit());
     return;
   }
 
@@ -41,6 +42,7 @@ function shutdown(signal) {
   server.closeIdleConnections?.();
   server.close(async error => {
     clearTimeout(forceClose);
+    await maintenance.stop();
     await store.close?.();
     if (error) {
       console.error(error);

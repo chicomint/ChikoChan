@@ -41,5 +41,3 @@ npm run start:local
 
 Local posts and uploads are kept in `data/`.
  `ADMIN_SESSION_SECRET` is required for legacy and named sessions; keep `ADMIN_PASSWORD` configured until at least one named root account has been tested.
-
-See [the LynxChan integration plan](docs/lynxchan-integration-plan.md) for the architecture comparison, security decisions, compatibility constraints, and phased roadmap.

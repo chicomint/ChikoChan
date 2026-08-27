@@ -128,3 +128,121 @@ test('Turnstile is disabled by default and requires typed environment-only secre
   process.env.CHIKO_CONFIG = configPath;
   assert.throws(() => loadConfig(), /secret keys are environment-only/);
 });
+
+test('trusted proxies and production security requirements fail closed', () => {
+  assert.equal(loadConfig({ trustProxy: 1 }).trustProxy, 1);
+  assert.deepEqual(loadConfig({ trustProxy: ['loopback', '10.0.0.0/8'] }).trustProxy, [
+    'loopback', '10.0.0.0/8'
+  ]);
+  assert.throws(() => loadConfig({
+    deployment: { environment: 'production' },
+    trustProxy: true,
+    storage: 'mongodb',
+    mongoUrl: 'mongodb://localhost/chikochan'
+  }), /forbidden in production/);
+
+  const production = {
+    deployment: { environment: 'production', publicOrigin: 'https://boards.example' },
+    storage: 'mongodb',
+    mongoUrl: 'mongodb://localhost/chikochan',
+    mongo: { requireTransactions: true },
+    trustProxy: 1,
+    privacy: { abuseFingerprintSecret: 'privacy-secret-that-is-at-least-32-characters' },
+    postingAuthorization: {
+      enabled: true,
+      secret: 'posting-secret-that-is-at-least-32-characters',
+      ttlMs: 120000
+    },
+    rateLimit: { backend: 'mongodb' },
+    media: { stripMetadata: true, stripMetadataRequired: true },
+    antiAbuse: {
+      turnstile: {
+        enabled: true,
+        siteKey: 'site-key',
+        secretKey: 'secret-key',
+        failureMode: 'closed'
+      }
+    }
+  };
+  assert.equal(loadConfig(production).deployment.isProduction, true);
+  assert.throws(
+    () => loadConfig({ ...production, rateLimit: { backend: 'memory' } }),
+    /shared MongoDB storage|RATE_LIMIT_STORE/
+  );
+  assert.throws(
+    () => loadConfig({ ...production, postingAuthorization: { enabled: false } }),
+    /POSTING_AUTH_REQUIRED/
+  );
+});
+
+test('request, quarantine, metadata, and shared limiter settings are typed', () => {
+  const config = loadConfig({
+    storage: 'json',
+    limits: { maxRequestBytes: 30 * 1024 * 1024 },
+    lifecycle: { quarantineRetentionHours: 6 },
+    rateLimit: {
+      backend: 'memory',
+      operations: { deletePassword: { windowMs: 2000, limit: 2 } }
+    }
+  });
+  assert.equal(config.limits.maxRequestBytes, 30 * 1024 * 1024);
+  assert.equal(config.lifecycle.quarantineRetentionHours, 6);
+  assert.deepEqual(config.rateLimit.operations.deletePassword, { windowMs: 2000, limit: 2 });
+  assert.throws(
+    () => loadConfig({ rateLimit: { backend: 'redis', redisUrl: '' } }),
+    /requires REDIS_URL/
+  );
+  assert.throws(
+    () => loadConfig({ media: { stripMetadata: false, stripMetadataRequired: true } }),
+    /cannot be enabled/
+  );
+});
+
+test('staff MFA requires an environment-style 32-byte encryption key when enabled', () => {
+  const config = loadConfig({
+    staffMfa: {
+      enabled: true,
+      issuer: 'ChikoChan Test',
+      encryptionKey: '22'.repeat(32)
+    }
+  });
+  assert.equal(config.staffMfa.enabled, true);
+  assert.equal(config.staffMfa.issuer, 'ChikoChan Test');
+  assert.equal(config.staffMfa.encryptionKey, '22'.repeat(32));
+  assert.throws(
+    () => loadConfig({ staffMfa: { enabled: true, encryptionKey: 'too-short' } }),
+    /encode exactly 32 random bytes/
+  );
+  assert.throws(
+    () => loadConfig({ staffMfa: { issuer: 'bad\nissuer' } }),
+    /staffMfa/
+  );
+});
+
+test('object storage is explicit, credential-safe, and required for declared multi-instance deployments', () => {
+  const object = {
+    backend: 'object',
+    object: {
+      endpoint: 'https://objects.example.test',
+      region: 'us-east-1',
+      quarantineBucket: 'chiko-quarantine',
+      publicBucket: 'chiko-public',
+      publicBaseUrl: 'https://media.example.test',
+      pathStyle: true,
+      requestTimeoutMs: 5000,
+      accessKeyId: 'synthetic-access-key',
+      secretAccessKey: 'synthetic-secret-key'
+    }
+  };
+  const config = loadConfig({ storage: 'json', mediaStorage: object });
+  assert.equal(config.mediaStorage.backend, 'object');
+  assert.equal(config.mediaStorage.object.publicBucket, 'chiko-public');
+  assert.throws(
+    () => loadConfig({ storage: 'json', mediaStorage: { ...object, object: { ...object.object, publicBucket: 'chiko-quarantine' } } }),
+    /different buckets/
+  );
+  assert.throws(
+    () => loadConfig({ deployment: { environment: 'production', multiInstance: true } }),
+    /Production requires shared MongoDB storage|shared object media storage/
+  );
+});

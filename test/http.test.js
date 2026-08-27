@@ -2,6 +2,7 @@
 
 const assert = require('node:assert/strict');
 const childProcess = require('node:child_process');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -126,8 +127,7 @@ test('posts through compatibility fields and keeps backlinks in JSON', async t =
   assert.match(html, /class="comment op-comment postMessage"/);
   assert.match(html, new RegExp(`class="post-menu"[\\s\\S]+aria-label="Post actions for No\\.${thread.id}"`));
   assert.match(html, new RegExp(`id="pi${thread.id}"[\\s\\S]+class="report-control"[\\s\\S]+</div>`));
-  assert.match(html, /<time class="date-time dateTime" datetime="[^"]+">\d{2}\/\d{2}\/\d{2}\([A-Z][a-z]{2}\)\d{2}:\d{2}:\d{2}<\/time>/);
-  assert.doesNotMatch(html, /<time class="date-time dateTime"[^>]*>[^<]*ago<\/time>/);
+  assert.match(html, /<time class="date-time dateTime" datetime="[^"]+" title="[^"]+" aria-label="[^"]+Exact time: [^"]+">\d+ sec ago<\/time>/);
 });
 
 test('serves the 4chan-style board, catalog, threads, and thread APIs', async t => {
@@ -135,12 +135,13 @@ test('serves the 4chan-style board, catalog, threads, and thread APIs', async t 
   const thread = await createThread(server.url);
   await createReply(server.url, thread.id, `>>${thread.id}`);
 
-  const [boards, catalog, threads, page, threadApi] = await Promise.all([
+  const [boards, catalog, threads, page, threadApi, catalogHtml] = await Promise.all([
     fetch(`${server.url}/boards.json`).then(response => response.json()),
     fetch(`${server.url}/chiko/catalog.json`).then(response => response.json()),
     fetch(`${server.url}/chiko/threads.json`).then(response => response.json()),
     fetch(`${server.url}/chiko/1.json`).then(response => response.json()),
-    fetch(`${server.url}/chiko/thread/${thread.id}.json`).then(response => response.json())
+    fetch(`${server.url}/chiko/thread/${thread.id}.json`).then(response => response.json()),
+    fetch(`${server.url}/chiko/catalog`).then(response => response.text())
   ]);
 
   assert.equal(boards.boards[0].board, 'chiko');
@@ -150,6 +151,7 @@ test('serves the 4chan-style board, catalog, threads, and thread APIs', async t 
   assert.deepEqual(threadApi.posts[0].backlinks, [thread.id + 1]);
   assert.deepEqual(threadApi.posts[1].references, [thread.id]);
   assert.equal(threadApi.posts[0].ext, '.png');
+  assert.match(catalogHtml, /<time class="catalog-date" datetime="[^"]+" title="[^"]+" aria-label="[^"]+Exact time: [^"]+">\d+ sec ago<\/time>/);
 });
 
 test('reports healthy and ready when JSON storage and uploads are writable', async t => {
@@ -204,6 +206,44 @@ test('escapes post HTML and renders dead citations without unsafe links', async 
   assert.doesNotMatch(html, /<script>alert\(1\)<\/script>/);
   assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
   assert.match(html, /class="deadlink" data-post-id="99999"/);
+});
+
+test('post bodies contain large media and safely wrap long uninterrupted comments', async t => {
+  const server = await testServer(t);
+  const longWord = 'chiko'.repeat(500);
+  const hostile = '<img src=x onerror=alert(1)>';
+  const thread = await createThread(server.url, {
+    comment: `A long normal paragraph that should remain beside the thumbnail without overlapping it.\n${longWord}${hostile}`
+  });
+  const reply = await createImageReply(server.url, thread.id, `Reply paragraph\n${longWord}`);
+  await server.app.locals.chikochan.store.update(data => {
+    const openingAttachment = data.threads[0].attachments[0];
+    openingAttachment.width = 1600;
+    openingAttachment.height = 1200;
+  });
+
+  const [threadHtml, boardHtml, style] = await Promise.all([
+    fetch(`${server.url}/chiko/thread/${thread.id}`).then(response => response.text()),
+    fetch(`${server.url}/chiko/`).then(response => response.text()),
+    fetch(`${server.url}/style.css`).then(response => response.text())
+  ]);
+
+  for (const html of [threadHtml, boardHtml]) {
+    assert.match(html, /class="post-body post-body-with-media"[\s\S]+class="post-attachments"[\s\S]+class="comment op-comment postMessage"/);
+    assert.match(html, new RegExp(`id="p${reply.id}"[\\s\\S]+class="post-body post-body-with-media"[\\s\\S]+id="m${reply.id}"`));
+    assert.match(html, /class="post-img"[^>]+width="1600" height="1200"/);
+    assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;/);
+    assert.doesNotMatch(html, /<img src=x onerror=alert\(1\)>/);
+  }
+  const bodyRule = /\.post-body\s*\{([^}]+)\}/.exec(style)?.[1] || '';
+  const commentRule = /^\.comment\s*\{([^}]+)\}/m.exec(style)?.[1] || '';
+  const attachmentsRule = /\.post-attachments\s*\{([^}]+)\}/.exec(style)?.[1] || '';
+  assert.match(bodyRule, /display:\s*flex/);
+  assert.match(bodyRule, /flex-wrap:\s*wrap/);
+  assert.match(bodyRule, /min-width:\s*0/);
+  assert.match(commentRule, /overflow-wrap:\s*anywhere/);
+  assert.match(commentRule, /word-break:\s*break-word/);
+  assert.doesNotMatch(attachmentsRule, /float:/);
 });
 
 test('file-only deletion retains the post and removes its upload', async t => {
@@ -293,6 +333,7 @@ test('opt-in multiple attachments preserve legacy APIs, moderation, restore, and
   assert.equal(post.attachments.every(attachment => attachment.spoiler), true);
   assert.equal(stored.media.length, 2);
   assert.deepEqual(stored.media.map(asset => asset.refCount), [1, 1]);
+  const originalMediaPaths = new Map(stored.media.map(asset => [asset.id, asset.path]));
   const filePaths = stored.media.map(asset => path.join(server.directory, asset.path));
   assert.equal(filePaths.every(filePath => fs.existsSync(filePath)), true);
 
@@ -351,7 +392,7 @@ test('opt-in multiple attachments preserve legacy APIs, moderation, restore, and
       kind: 'ban',
       target: 'file',
       fileHash: secondHash,
-      scope: 'global',
+      scope: 'board',
       duration: '0',
       reason: 'Blocked attachment',
       reasonVisible: '1'
@@ -396,6 +437,13 @@ test('opt-in multiple attachments preserve legacy APIs, moderation, restore, and
   assert.equal(stored.trash[0].post.attachments.length, 1);
   assert.equal(stored.trash[0].post.attachments[0].imageName, 'second<&>.gif');
   assert.deepEqual(stored.media.map(asset => asset.refCount), [1, 1]);
+  const heldSecond = stored.media.find(asset => asset.id === post.attachments[1].assetId);
+  assert.equal(heldSecond.state, 'moderator_hold');
+  assert.equal(heldSecond.holdPending, false);
+  assert.equal(heldSecond.path, '');
+  assert.equal(fs.existsSync(path.join(server.directory, originalMediaPaths.get(heldSecond.id))), false);
+  assert.equal(fs.existsSync(path.join(server.directory, 'quarantine', heldSecond.hold.quarantineSourceKey)), true);
+  assert.equal((await fetch(`${server.url}/${originalMediaPaths.get(heldSecond.id)}`)).status, 404);
   const oneFileHtml = await fetch(`${server.url}/chiko/thread/${created.id}`).then(result => result.text());
   assert.match(oneFileHtml, /data-attachment-count="1"/);
   assert.doesNotMatch(oneFileHtml, /second&lt;&amp;&gt;\.gif/);
@@ -411,6 +459,8 @@ test('opt-in multiple attachments preserve legacy APIs, moderation, restore, and
   assert.equal(stored.threads[0].attachments.length, 2);
   assert.equal(stored.threads[0].attachments[1].id, secondAttachmentId);
   assert.equal(stored.trash.length, 0);
+  assert.equal(stored.media.find(asset => asset.id === heldSecond.id).state, 'approved');
+  assert.equal(fs.existsSync(path.join(server.directory, originalMediaPaths.get(heldSecond.id))), true);
 
   const trash = await fetch(`${server.url}/admin/delete`, {
     method: 'POST',
@@ -429,7 +479,8 @@ test('opt-in multiple attachments preserve legacy APIs, moderation, restore, and
   assert.equal(stored.threads[0].imageDeleted, true);
   assert.equal(stored.trash[0].post.attachments.length, 2);
   assert.deepEqual(stored.media.map(asset => asset.refCount), [1, 1]);
-  assert.equal(filePaths.every(filePath => fs.existsSync(filePath)), true);
+  assert.equal(stored.media.every(asset => asset.state === 'moderator_hold' && asset.holdPending === false), true);
+  assert.equal(filePaths.every(filePath => fs.existsSync(filePath)), false);
 
   const restore = await fetch(`${server.url}/admin/trash/restore`, {
     method: 'POST',
@@ -441,6 +492,8 @@ test('opt-in multiple attachments preserve legacy APIs, moderation, restore, and
   stored = JSON.parse(fs.readFileSync(path.join(server.directory, 'posts.json'), 'utf8'));
   assert.equal(stored.trash.length, 0);
   assert.equal(stored.threads[0].attachments.length, 2);
+  assert.equal(stored.media.every(asset => asset.state === 'approved'), true);
+  assert.equal(filePaths.every(filePath => fs.existsSync(filePath)), true);
 
   const deletion = await fetch(`${server.url}/delete?json=1`, {
     method: 'POST',
@@ -471,7 +524,7 @@ test('opt-in multiple attachments preserve legacy APIs, moderation, restore, and
   bannedFile.set('upfile', new Blob([ONE_PIXEL_GIF], { type: 'image/gif' }), 'blocked.gif');
   const blocked = await fetch(`${server.url}/post?json=1`, { method: 'POST', body: bannedFile });
   assert.equal(blocked.status, 403);
-  assert.match((await blocked.json()).error, /Posting is blocked: Blocked attachment/);
+  assert.equal((await blocked.json()).error, 'That media cannot be posted.');
   assert.equal(fs.readdirSync(path.join(server.directory, 'src')).length, 0);
 });
 
@@ -583,6 +636,257 @@ test('optional Turnstile protects public posts without IP disclosure and bypasse
   });
   assert.equal(staffReply.status, 303, await staffReply.text());
   assert.equal(validations.length, 2);
+});
+
+test('one-time posting authorization is consumed before multipart upload parsing', async t => {
+  const server = await testServer(t, {
+    postingAuthorization: {
+      enabled: true,
+      secret: 'posting-authorization-http-secret-123456789',
+      ttlMs: 60000
+    }
+  });
+
+  function upload(token, subject) {
+    const form = new FormData();
+    form.set('sub', subject);
+    form.set('com', 'Authorization-gated upload');
+    form.set('pwd', 'authorization-password');
+    form.set('upfile', new Blob([ONE_PIXEL_PNG], { type: 'image/png' }), 'authorized.png');
+    return fetch(`${server.url}/chiko/post?threadId=0&json=1`, {
+      method: 'POST',
+      headers: token ? { authorization: `ChikoPost ${token}` } : {},
+      body: form
+    });
+  }
+
+  const missing = await upload('', 'Missing token');
+  assert.equal(missing.status, 403);
+  assert.equal(fs.readdirSync(path.join(server.directory, 'quarantine')).length, 0);
+  assert.equal(fs.readdirSync(path.join(server.directory, 'src')).length, 0);
+
+  const issuedResponse = await fetch(`${server.url}/posting-authorizations?json=1`, {
+    method: 'POST',
+    headers: {
+      accept: 'application/json',
+      'content-type': 'application/x-www-form-urlencoded'
+    },
+    body: new URLSearchParams({ board: 'chiko', threadId: '0' })
+  });
+  assert.equal(issuedResponse.status, 201, await issuedResponse.clone().text());
+  const issued = await issuedResponse.json();
+  assert.match(issued.token, /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
+  assert.match(issuedResponse.headers.get('set-cookie') || '', /HttpOnly/);
+
+  const accepted = await upload(issued.token, 'Authorized thread');
+  assert.equal(accepted.status, 201, await accepted.text());
+  assert.equal(fs.readdirSync(path.join(server.directory, 'quarantine')).length, 0);
+  assert.equal(fs.readdirSync(path.join(server.directory, 'src')).length, 1);
+
+  const replay = await upload(issued.token, 'Replay attempt');
+  assert.equal(replay.status, 403);
+  assert.match((await replay.json()).error, /expired, or already used/);
+  assert.equal(fs.readdirSync(path.join(server.directory, 'quarantine')).length, 0);
+  assert.equal(fs.readdirSync(path.join(server.directory, 'src')).length, 1);
+});
+
+test('public media route serves only referenced approved records and hash bans reject in quarantine', async t => {
+  const server = await testServer(t);
+  fs.writeFileSync(path.join(server.directory, 'src', 'orphan.png'), ONE_PIXEL_PNG);
+  const orphan = await fetch(`${server.url}/src/orphan.png`);
+  assert.equal(orphan.status, 404);
+  fs.unlinkSync(path.join(server.directory, 'src', 'orphan.png'));
+
+  const sha256 = crypto.createHash('sha256').update(ONE_PIXEL_PNG).digest('hex');
+  await server.app.locals.chikochan.store.update(data => {
+    data.mediaHashBans.push({
+      id: 'synthetic-hash-ban',
+      sha256,
+      scope: 'global',
+      boardId: '',
+      active: true,
+      reason: 'Synthetic fixture',
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    });
+  });
+
+  const form = new FormData();
+  form.set('sub', 'Blocked media');
+  form.set('com', 'This harmless fixture matches a test-only hash ban.');
+  form.set('upfile', new Blob([ONE_PIXEL_PNG], { type: 'image/png' }), 'blocked.png');
+  const blocked = await fetch(`${server.url}/post?json=1`, { method: 'POST', body: form });
+  assert.equal(blocked.status, 403);
+  assert.match((await blocked.json()).error, /cannot be posted/);
+  assert.equal(fs.readdirSync(path.join(server.directory, 'quarantine')).length, 0);
+  assert.equal(fs.readdirSync(path.join(server.directory, 'src')).length, 0);
+  const state = server.app.locals.chikochan.service.getData();
+  assert.equal(state.media.length, 0);
+  assert.equal(state.mediaDecisions.at(-1).reasonCode, 'hash-ban-match');
+});
+
+test('a global staff hash ban removes every matching known asset from public storage', async t => {
+  const server = await testServer(t, {
+    adminPassword: 'admin-test-password',
+    adminSessionSecret: 'admin-test-session-secret'
+  });
+  const created = await createThread(server.url, { comment: 'Synthetic hash-ban fixture' });
+  let stored = JSON.parse(fs.readFileSync(path.join(server.directory, 'posts.json'), 'utf8'));
+  const media = stored.media[0];
+  const originalPath = media.path;
+  assert.equal((await fetch(`${server.url}/${originalPath}`)).status, 200);
+
+  const login = await fetch(`${server.url}/admin/login`, {
+    method: 'POST',
+    redirect: 'manual',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ password: 'admin-test-password' })
+  });
+  const cookie = login.headers.get('set-cookie').split(';')[0];
+  const dashboard = await fetch(`${server.url}/admin`, { headers: { cookie } }).then(response => response.text());
+  const csrf = /name="csrf" value="([^"]+)"/.exec(dashboard)?.[1];
+  const sanction = await fetch(`${server.url}/admin/sanction`, {
+    method: 'POST',
+    redirect: 'manual',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', cookie },
+    body: new URLSearchParams({
+      csrf,
+      postId: String(created.id),
+      kind: 'ban',
+      target: 'file',
+      fileHash: media.sha256,
+      scope: 'global',
+      duration: '0',
+      reason: 'Synthetic prohibited hash',
+      reasonVisible: '1'
+    })
+  });
+  assert.equal(sanction.status, 303, await sanction.text());
+
+  stored = JSON.parse(fs.readFileSync(path.join(server.directory, 'posts.json'), 'utf8'));
+  assert.equal(stored.media[0].state, 'moderator_hold');
+  assert.equal(stored.media[0].holdReason, 'hash-ban');
+  assert.equal(stored.media[0].holdPending, false);
+  assert.equal(fs.existsSync(path.join(server.directory, originalPath)), false);
+  assert.equal(fs.existsSync(path.join(
+    server.directory,
+    'quarantine',
+    stored.media[0].hold.quarantineSourceKey
+  )), true);
+  assert.equal((await fetch(`${server.url}/${originalPath}`)).status, 404);
+  const mediaPage = await fetch(`${server.url}/admin/media?state=moderator_hold&postId=${created.id}`, {
+    headers: { cookie }
+  });
+  const mediaHtml = await mediaPage.text();
+  assert.equal(mediaPage.status, 200, mediaHtml);
+  assert.match(mediaHtml, /Media safety/);
+  assert.match(mediaHtml, new RegExp(media.sha256));
+  assert.match(mediaHtml, /hash-ban/);
+  assert.doesNotMatch(mediaHtml, /<img\b/i);
+  assert.equal(mediaHtml.includes(originalPath), false);
+  assert.equal(mediaHtml.includes(stored.media[0].hold.quarantineSourceKey), false);
+
+  const manualHash = 'a'.repeat(64);
+  const manualBan = await fetch(`${server.url}/admin/media/hash-ban`, {
+    method: 'POST',
+    redirect: 'manual',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', cookie },
+    body: new URLSearchParams({
+      csrf,
+      sha256: manualHash,
+      scope: 'global',
+      boardId: stored.boards[0].id,
+      reason: 'Manual synthetic hash',
+      moderatorNote: 'Harmless test value'
+    })
+  });
+  assert.equal(manualBan.status, 303, await manualBan.text());
+  stored = JSON.parse(fs.readFileSync(path.join(server.directory, 'posts.json'), 'utf8'));
+  const manualEntry = stored.mediaHashBans.find(entry => entry.sha256 === manualHash);
+  assert.equal(manualEntry.active, true);
+  const lift = await fetch(`${server.url}/admin/media/hash-unban`, {
+    method: 'POST',
+    redirect: 'manual',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', cookie },
+    body: new URLSearchParams({ csrf, hashBanId: manualEntry.id })
+  });
+  assert.equal(lift.status, 303, await lift.text());
+  stored = JSON.parse(fs.readFileSync(path.join(server.directory, 'posts.json'), 'utf8'));
+  assert.equal(stored.mediaHashBans.find(entry => entry.id === manualEntry.id).active, false);
+});
+
+test('object storage keeps quarantine private and redirects only approved referenced media', async t => {
+  const quarantine = new Map();
+  const approved = new Map();
+  const storageAdapter = {
+    backend: 'object',
+    async stageFile(filePath, key) {
+      quarantine.set(key, fs.readFileSync(filePath));
+      return key;
+    },
+    async promote(sourceKey, destinationKey) {
+      assert.equal(quarantine.has(sourceKey), true);
+      approved.set(destinationKey, quarantine.get(sourceKey));
+      quarantine.delete(sourceKey);
+      return destinationKey;
+    },
+    async hold(sourceKey, destinationKey) {
+      assert.equal(approved.has(sourceKey), true);
+      quarantine.set(destinationKey, approved.get(sourceKey));
+      approved.delete(sourceKey);
+      return destinationKey;
+    },
+    async deleteQuarantine(key) { quarantine.delete(key); },
+    async deleteApproved(key) { approved.delete(key); },
+    publicUrl(key) { return `https://media.example.test/assets/${encodeURIComponent(key)}`; },
+    async hasApproved(key) { return approved.has(key); },
+    async hasQuarantine(key) { return quarantine.has(key); },
+    async cleanupQuarantine() { return 0; },
+    async healthCheck() { return true; },
+    async close() {}
+  };
+  const server = await testServer(t, {
+    mediaStorageAdapter: storageAdapter,
+    mediaStorage: {
+      backend: 'object',
+      object: {
+        endpoint: 'https://objects.example.test',
+        region: 'us-east-1',
+        quarantineBucket: 'chiko-quarantine',
+        publicBucket: 'chiko-public',
+        publicBaseUrl: 'https://media.example.test/assets',
+        accessKeyId: 'synthetic-access-key',
+        secretAccessKey: 'synthetic-secret-key'
+      }
+    }
+  });
+
+  const missing = await fetch(`${server.url}/src/not-approved.png`, { redirect: 'manual' });
+  assert.equal(missing.status, 404);
+  const created = await createThread(server.url, { password: 'object-delete-password' });
+  const stored = JSON.parse(fs.readFileSync(path.join(server.directory, 'posts.json'), 'utf8'));
+  const filename = path.basename(stored.threads[0].image);
+  assert.equal(quarantine.size, 0);
+  assert.equal(approved.has(filename), true);
+
+  const delivery = await fetch(`${server.url}/src/${filename}`, { redirect: 'manual' });
+  assert.equal(delivery.status, 302);
+  assert.equal(delivery.headers.get('location'), `https://media.example.test/assets/${filename}`);
+  assert.equal(delivery.headers.get('cache-control'), 'no-store');
+  assert.match(delivery.headers.get('content-security-policy'), /https:\/\/media\.example\.test/);
+
+  const deletion = await fetch(`${server.url}/delete?json=1`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
+    body: new URLSearchParams({
+      postIds: String(created.id),
+      pwd: 'object-delete-password',
+      fileOnly: '1'
+    })
+  });
+  assert.equal(deletion.status, 200, await deletion.text());
+  assert.equal(approved.size, 0);
+  assert.equal((await fetch(`${server.url}/src/${filename}`, { redirect: 'manual' })).status, 404);
 });
 
 test('explicit extension hooks can reject or observe but cannot bypass moderation boundaries', async t => {
@@ -1122,7 +1426,10 @@ test('staff edits, archives, trash restoration, and expiry preserve public and m
   assert.equal(stored.threads[0].imageDeleted, true);
   assert.equal(stored.trash[0].kind, 'attachment');
   assert.equal(stored.media[0].refCount, 1);
-  assert.equal(fs.existsSync(filePath), true);
+  assert.equal(stored.media[0].state, 'moderator_hold');
+  assert.equal(stored.media[0].holdPending, false);
+  assert.equal(fs.existsSync(filePath), false);
+  assert.equal((await fetch(`${server.url}/${stored.media[0].hold.originalPath}`)).status, 404);
   const deletedFilePage = await fetch(`${server.url}/chiko/thread/${thread.id}`).then(response => response.text());
   assert.match(deletedFilePage, /File deleted\./);
 
@@ -1136,6 +1443,8 @@ test('staff edits, archives, trash restoration, and expiry preserve public and m
   stored = JSON.parse(fs.readFileSync(path.join(server.directory, 'posts.json'), 'utf8'));
   assert.equal(stored.trash.length, 0);
   assert.ok(stored.threads[0].image);
+  assert.equal(stored.media[0].state, 'approved');
+  assert.equal(fs.existsSync(filePath), true);
 
   const trashThread = async () => fetch(`${server.url}/admin/delete`, {
     method: 'POST',
@@ -1449,7 +1758,11 @@ test('report lifecycle preserves resolutions, audit history, and reporter privac
   const resolve = await fetch(`${server.url}/admin/reports/resolve`, {
     method: 'POST',
     redirect: 'manual',
-    headers: { 'content-type': 'application/x-www-form-urlencoded', cookie },
+    headers: {
+      'content-type': 'application/x-www-form-urlencoded',
+      'x-request-id': 'report-action-123',
+      cookie
+    },
     body: new URLSearchParams({
       csrf,
       reportId: firstReportId,
@@ -1466,6 +1779,9 @@ test('report lifecycle preserves resolutions, audit history, and reporter privac
   assert.equal(resolved.resolution, 'action-taken');
   assert.equal(resolved.moderatorNote, moderatorNote);
   assert.deepEqual(resolved.history.map(entry => entry.action), ['resolved']);
+  const resolutionLog = stored.moderationLog.find(entry => entry.action === 'report-resolve');
+  assert.equal(resolutionLog.requestId, 'report-action-123');
+  assert.match(resolutionLog.actionId, /^[A-Za-z0-9._-]{8,100}$/);
   assert.match(resolved.reporterKey, /^[A-Za-z0-9_-]{43}$/);
   assert.match(stored.reports.find(report => report.id === secondReport.id).reporterKey, /^[A-Za-z0-9_-]{43}$/);
   assert.doesNotMatch(JSON.stringify(stored), /127\.0\.0\.1|198\.51\.100\.9/);

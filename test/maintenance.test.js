@@ -127,7 +127,8 @@ test('lease-protected maintenance expires sanctions, archives overflow, and safe
     expiredSanctions: 1,
     archivedThreads: 1,
     orphanAssets: 1,
-    purgedTrash: 1
+    purgedTrash: 1,
+    purgedQuarantineFiles: 0
   });
 
   const saved = store.read();

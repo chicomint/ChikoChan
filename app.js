@@ -1,15 +1,18 @@
 'use strict';
 
 const express = require('express');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { loadConfig } = require('./config');
 const { AdminAuth } = require('./lib/admin-auth');
 const { TURNSTILE_ORIGIN, TurnstileAdapter } = require('./lib/anti-abuse');
+const { ClientAddressPolicy } = require('./lib/client-address');
 const { apiBoards, apiCatalog, apiThread, apiThreads } = require('./lib/api');
 const { BoardService, findPost } = require('./lib/board');
 const { MongoStore } = require('./lib/mongo-store');
 const { MaintenanceRunner } = require('./lib/maintenance');
+const { MediaSafetyService } = require('./lib/media-safety');
 const { Renderer } = require('./lib/render');
 const { staffCan } = require('./lib/staff');
 const { JsonStore } = require('./lib/store');
@@ -17,36 +20,8 @@ const { HookRegistry } = require('./lib/hooks');
 const { Translator } = require('./lib/i18n');
 const { UploadManager } = require('./lib/uploads');
 const { escapeXML, httpError } = require('./lib/utils');
-
-class MemoryRateLimiter {
-  constructor(windowMs, limit, message) {
-    this.windowMs = windowMs;
-    this.limit = limit;
-    this.message = message;
-    this.buckets = new Map();
-  }
-
-  check(key) {
-    const now = Date.now();
-    const existing = this.buckets.get(key);
-    const bucket = existing && now - existing.startedAt < this.windowMs
-      ? existing
-      : { startedAt: now, count: 0 };
-    if (bucket.count >= this.limit) throw httpError(429, this.message);
-    bucket.count += 1;
-    this.buckets.set(key, bucket);
-
-    if (this.buckets.size > 1000) {
-      for (const [bucketKey, value] of this.buckets) {
-        if (now - value.startedAt >= this.windowMs) this.buckets.delete(bucketKey);
-      }
-    }
-  }
-}
-
-function clientKey(request) {
-  return request.ip || request.socket?.remoteAddress || 'unknown';
-}
+const { createAuthorizationNonceStore, PostingAuthorization } = require('./lib/posting-authorization');
+const { createRateLimitStore, RateLimiter } = require('./lib/rate-limit');
 
 function isJsonRequest(request) {
   return request.query.json === '1'
@@ -78,10 +53,29 @@ function createApp(overrides = {}) {
   const config = loadConfig(overrides);
   const store = overrides.store || (config.storage === 'json' ? new JsonStore(config) : new MongoStore(config));
   store.ready ||= Promise.resolve(store);
-  const uploads = new UploadManager(config);
+  const uploads = new UploadManager(config, {
+    mediaJobQueue: overrides.mediaJobQueue,
+    storageAdapter: overrides.mediaStorageAdapter,
+    storageFetch: overrides.mediaStorageFetch,
+    logger: overrides.logger
+  });
   const hooks = new HookRegistry(config, overrides.extensionHooks, { logger: overrides.logger });
   const i18n = new Translator(config, overrides.translations);
   const service = new BoardService(config, store, uploads);
+  const mediaSafety = new MediaSafetyService(config, service, {
+    provider: overrides.knownIllegalMediaProvider,
+    logger: overrides.logger
+  });
+  const mediaSafetyStatus = mediaSafety.status();
+  if (mediaSafetyStatus.configured && !mediaSafetyStatus.provider.available) {
+    (overrides.logger || console).warn(
+      `Known-illegal-media provider ${mediaSafetyStatus.provider.name} is configured but unavailable.`
+    );
+    mediaSafety.unavailableWarningEmitted = true;
+    if (mediaSafetyStatus.failClosed) {
+      throw new Error('Configured known-illegal-media provider is unavailable while fail-closed mode is enabled.');
+    }
+  }
   const renderer = new Renderer(config, () => store.cache || service.getData(), i18n);
   const admin = new AdminAuth(config);
   const antiAbuse = new TurnstileAdapter(config, {
@@ -89,40 +83,74 @@ function createApp(overrides = {}) {
     logger: overrides.logger
   });
   const maintenance = new MaintenanceRunner(config, store, service, { logger: overrides.logger });
+  const clientAddresses = new ClientAddressPolicy(config);
+  const rateLimitStore = createRateLimitStore(config, store, overrides);
+  const rateLimiter = new RateLimiter(config, rateLimitStore);
+  const authorizationNonceStore = createAuthorizationNonceStore(config, store, overrides);
+  const postingAuthorization = new PostingAuthorization(config, authorizationNonceStore);
   const app = express();
-  const postLimiter = new MemoryRateLimiter(
-    config.limits.postRateWindowMs,
-    config.limits.postRateLimit,
-    'Too many posts from this address. Wait a moment and try again.'
-  );
-  const reportLimiter = new MemoryRateLimiter(
-    config.limits.reportRateWindowMs,
-    config.limits.reportRateLimit,
-    'Too many reports from this address. Try again later.'
-  );
-  const adminLoginLimiter = new MemoryRateLimiter(5 * 60 * 1000, 5, 'Too many login attempts. Try again later.');
+  const publicMediaOrigin = config.mediaStorage.backend === 'object'
+    ? new URL(config.mediaStorage.object.publicBaseUrl).origin
+    : '';
 
   app.disable('x-powered-by');
   if (config.trustProxy) app.set('trust proxy', config.trustProxy);
 
   app.use((request, response, next) => {
+    const suppliedRequestId = String(request.get('x-request-id') || '');
+    request.id = /^[A-Za-z0-9._-]{8,100}$/.test(suppliedRequestId)
+      ? suppliedRequestId
+      : crypto.randomUUID();
+    response.setHeader('X-Request-Id', request.id);
     response.setHeader('X-Content-Type-Options', 'nosniff');
     response.setHeader('X-Frame-Options', 'DENY');
     response.setHeader('Referrer-Policy', 'same-origin');
     response.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+    response.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+    response.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+    response.setHeader('X-Permitted-Cross-Domain-Policies', 'none');
+    if (config.security.hsts.enabled && request.secure) {
+      const hsts = [`max-age=${config.security.hsts.maxAgeSeconds}`];
+      if (config.security.hsts.includeSubDomains) hsts.push('includeSubDomains');
+      if (config.security.hsts.preload) hsts.push('preload');
+      response.setHeader('Strict-Transport-Security', hsts.join('; '));
+    }
     response.setHeader('Content-Security-Policy', [
       "default-src 'self'",
       "base-uri 'none'",
       "form-action 'self'",
       "frame-ancestors 'none'",
-      "img-src 'self' data:",
-      "media-src 'self'",
+      `img-src 'self' data:${publicMediaOrigin ? ` ${publicMediaOrigin}` : ''}`,
+      `media-src 'self'${publicMediaOrigin ? ` ${publicMediaOrigin}` : ''}`,
       "object-src 'none'",
       antiAbuse.enabled ? `script-src 'self' ${TURNSTILE_ORIGIN}` : "script-src 'self'",
       antiAbuse.enabled ? `frame-src ${TURNSTILE_ORIGIN}` : "frame-src 'none'",
+      antiAbuse.enabled ? `connect-src 'self' ${TURNSTILE_ORIGIN}` : "connect-src 'self'",
       "style-src 'self'"
     ].join('; '));
     next();
+  });
+
+  app.use((request, response, next) => {
+    if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method)) {
+      next();
+      return;
+    }
+    try {
+      const fetchSite = String(request.get('sec-fetch-site') || '').toLowerCase();
+      if (fetchSite === 'cross-site') throw httpError(403, 'Cross-origin mutation rejected.');
+      const origin = String(request.get('origin') || '');
+      if (origin) {
+        const supplied = new URL(origin);
+        const expected = config.deployment.publicOrigin
+          ? new URL(config.deployment.publicOrigin)
+          : new URL(`${request.protocol}://${request.get('host')}`);
+        if (supplied.origin !== expected.origin) throw httpError(403, 'Cross-origin mutation rejected.');
+      }
+      next();
+    } catch (error) {
+      next(Number(error?.status) ? error : httpError(403, 'Cross-origin mutation rejected.'));
+    }
   });
 
   const moderationHookActions = new Map([
@@ -131,13 +159,17 @@ function createApp(overrides = {}) {
     ['/admin/thread-setting', 'thread-setting'],
     ['/admin/sanction', 'sanction-create'],
     ['/admin/unban', 'sanction-lift'],
+    ['/admin/media/hash-ban', 'media-hash-ban'],
+    ['/admin/media/hash-unban', 'media-hash-unban'],
     ['/admin/reports/resolve', 'report-resolve'],
     ['/admin/reports/reopen', 'report-reopen'],
     ['/admin/trash/restore', 'trash-restore'],
     ['/admin/trash/purge', 'trash-purge'],
     ['/admin/boards/add', 'board-add'],
     ['/admin/boards/edit', 'board-edit'],
-    ['/admin/boards/delete', 'board-delete']
+    ['/admin/boards/delete', 'board-delete'],
+    ['/admin/boards/filters/add', 'board-filter-add'],
+    ['/admin/boards/filters/delete', 'board-filter-delete']
   ]);
   app.use((request, response, next) => {
     const action = request.method === 'POST' ? moderationHookActions.get(request.path) : '';
@@ -186,16 +218,26 @@ function createApp(overrides = {}) {
     response.sendFile(bannerPath);
   });
 
-  function serveUpload(request, response) {
-    const media = uploads.inspectServedFile(request.params.filename);
-    if (!media) {
+  async function serveUpload(request, response) {
+    const asset = await service.approvedMediaRecord(request.params.filename);
+    if (!asset) {
       response.status(404).send('Not found');
       return;
     }
-    response.type(media.mime);
+    const delivery = uploads.delivery(request.params.filename);
+    if (!delivery) {
+      response.status(404).send('Not found');
+      return;
+    }
+    if (delivery.kind === 'redirect') {
+      response.setHeader('Cache-Control', 'no-store');
+      response.redirect(302, delivery.url);
+      return;
+    }
+    response.type(delivery.mime);
     response.setHeader('Accept-Ranges', 'bytes');
-    response.setHeader('Cache-Control', 'public, max-age=86400, immutable');
-    response.sendFile(media.filePath, { acceptRanges: true });
+    response.setHeader('Cache-Control', 'private, no-cache');
+    response.sendFile(delivery.filePath, { acceptRanges: true });
   }
 
   app.get('/src/:filename', serveUpload);
@@ -217,9 +259,14 @@ function createApp(overrides = {}) {
   app.get('/readyz', async (request, response) => {
     response.setHeader('Cache-Control', 'no-store');
     try {
-      service.getData();
+      if (typeof store.healthCheck === 'function') await store.healthCheck();
+      else service.getData();
       fs.accessSync(config.dataDir, fs.constants.R_OK | fs.constants.W_OK);
       fs.accessSync(config.uploadDir, fs.constants.R_OK | fs.constants.W_OK);
+      fs.accessSync(config.quarantineDir, fs.constants.R_OK | fs.constants.W_OK);
+      await rateLimitStore.healthCheck();
+      if (!await uploads.healthCheck()) throw new Error('Media worker queue is not ready.');
+      if (postingAuthorization.enabled) await authorizationNonceStore.healthCheck();
       response.json({ status: 'ready' });
     } catch (error) {
       console.error(`Readiness check failed: ${error.message}`);
@@ -234,19 +281,21 @@ function createApp(overrides = {}) {
   }
 
   if (config.features.api) {
-    app.get('/boards.json', (request, response) => {
-      const data = service.getData();
-      apiResponse(response, apiBoards(config, data));
+    app.get('/boards.json', async (request, response) => {
+      const boards = await service.publicBoards();
+      apiResponse(response, apiBoards(config, { boards }));
     });
   }
 
-  function renderHome(request, response) {
-    const data = service.getData();
-    const boards = service.getBoards(data);
-    const siteStats = service.getSiteStats(data);
-    const latestPosts = service.latestPosts(30, data);
-    const latestImages = service.latestImages(24, data);
-    response.send(renderer.home(data, boards, siteStats, latestPosts, latestImages));
+  async function renderHome(request, response) {
+    const view = await service.publicHome();
+    response.send(renderer.home(
+      view.data,
+      view.boards,
+      view.stats,
+      view.latestPosts,
+      view.latestImages
+    ));
   }
 
   app.get(['/', '/index.html'], renderHome);
@@ -257,55 +306,60 @@ function createApp(overrides = {}) {
     });
   }
 
-  app.get('/pages/:slug', (request, response) => {
-    const page = service.getCustomPage(request.params.slug);
+  app.get('/pages/:slug', async (request, response) => {
+    const page = await service.publicCustomPage(request.params.slug);
     if (!page) throw httpError(404, 'Page not found.');
     response.send(renderer.page(page.slug, page));
   });
 
-  function renderBoardPage(board, pageNumber, response) {
-    const page = service.getPage(pageNumber, board.uri);
+  async function renderBoardPage(board, pageNumber, response) {
+    const page = await service.publicBoardPage(board, pageNumber);
     if (!page) throw httpError(404, 'Board page not found.');
     response.send(renderer.board(page));
   }
 
-  function renderThread(request, response, boardUri = null) {
-    const data = service.getData();
-    const thread = service.getThread(request.params.id, data);
-    if (!thread) throw httpError(404, 'Thread not found.');
-    const board = boardUri
-      ? service.getBoard(boardUri, data)
-      : service.getBoardById(thread.boardId, data);
-    if (!board || !board.enabled || thread.boardId !== board.id) throw httpError(404, 'Thread not found.');
-    response.send(renderer.thread(thread, data, board, service.getStats(data, board.uri)));
+  async function renderThread(request, response, boardId = '') {
+    const view = await service.publicThread(request.params.id, boardId);
+    if (!view) throw httpError(404, 'Thread not found.');
+    response.send(renderer.thread(view.thread, view.data, view.board, view.stats));
   }
 
   app.get('/thread/:id', (request, response) => renderThread(request, response));
 
-  app.get('/catalog', (request, response) => {
-    const data = service.getData();
-    const board = service.getDefaultBoard(data);
+  app.get('/catalog', async (request, response) => {
+    const board = await service.publicDefaultBoard();
     if (!board) throw httpError(404, 'Board not found.');
-    const threads = service.getSortedThreads(data, board.id);
-    response.send(renderer.catalog(data, threads, board, service.getStats(data, board.uri)));
+    const view = await service.publicCatalog(board, request.query.page);
+    response.send(renderer.catalog(view.data, view.threads, board, view.stats, view));
   });
 
+  async function renderOverboard(request, response, sfw) {
+    const view = await service.publicOverboard({
+      page: request.query.page,
+      sfw,
+      tag: request.query.tag
+    });
+    if (!view) throw httpError(404, 'Overboard page not found.');
+    response.send(renderer.overboard(view.entries, view));
+  }
+
+  app.get('/overboard', (request, response) => renderOverboard(request, response, false));
+  app.get('/overboard/sfw', (request, response) => renderOverboard(request, response, true));
+
   if (config.features.search) {
-    app.get('/search', (request, response) => {
-      const search = service.search(request.query.q);
-      const data = search.data || service.getData();
-      response.send(renderer.search(search.query, search.results, data, service.getSiteStats(data)));
+    app.get('/search', rateLimit('expensiveRead', 'Too many searches. Wait a moment and try again.'), async (request, response) => {
+      const search = await service.publicSearch(request.query.q);
+      const stats = service.usesTargetedQueries ? await store.siteStats() : service.getSiteStats(search.data);
+      response.send(renderer.search(search.query, search.results, search.data, stats));
     });
   }
 
   if (config.features.rss) {
-    app.get('/feed.xml', (request, response) => {
-      const data = service.getData();
-      const boardMap = new Map(data.boards.map(board => [board.id, board]));
-      const items = service.getSortedThreads(data).slice(0, 20).map(thread => {
-        const board = boardMap.get(thread.boardId) || data.boards[0];
-        const url = `${request.protocol}://${request.get('host')}${renderer.threadPath(board, thread.id)}`;
-        return `<item><title>${escapeXML(thread.title || `Thread No.${thread.id}`)}</title><link>${escapeXML(url)}</link><guid>${escapeXML(url)}</guid><pubDate>${new Date(thread.createdAt).toUTCString()}</pubDate><description>${escapeXML(thread.comment)}</description></item>`;
+    app.get('/feed.xml', async (request, response) => {
+      const view = await service.publicHome();
+      const items = view.latestPosts.slice(0, 20).map(entry => {
+        const url = `${request.protocol}://${request.get('host')}${renderer.threadPath(entry.board, entry.threadId)}#p${entry.post.id}`;
+        return `<item><title>${escapeXML(entry.post.title || `Post No.${entry.post.id}`)}</title><link>${escapeXML(url)}</link><guid>${escapeXML(url)}</guid><pubDate>${new Date(entry.post.createdAt).toUTCString()}</pubDate><description>${escapeXML(entry.post.comment)}</description></item>`;
       }).join('');
       response.type('application/rss+xml').send(`<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>${escapeXML(renderer.siteTitle())}</title><link>${escapeXML(`${request.protocol}://${request.get('host')}/`)}</link><description>${escapeXML(renderer.siteDescription())}</description>${items}</channel></rss>`);
     });
@@ -313,26 +367,136 @@ function createApp(overrides = {}) {
 
   app.get('/robots.txt', (request, response) => response.type('text/plain').send('User-agent: *\nDisallow: /admin\n'));
 
-  function rateLimit(limiter) {
-    return (request, response, next) => {
+  function abuseIdentity(request, purpose) {
+    return clientAddresses.fingerprint(request, purpose);
+  }
+
+  function rateLimit(operation, message) {
+    return rateLimiter.middleware(
+      operation,
+      request => abuseIdentity(request, `rate:${operation}`),
+      message
+    );
+  }
+
+  function staffRateLimit(operation, message) {
+    return rateLimiter.middleware(
+      operation,
+      request => request.staff?.id || abuseIdentity(request, `rate:${operation}`),
+      message
+    );
+  }
+
+  async function postRateLimit(request, response, next) {
+    const operation = Number(request.query.threadId) > 0 ? 'replyCreate' : 'threadCreate';
+    return rateLimit(operation, 'Too many posts from this address. Wait a moment and try again.')(request, response, next);
+  }
+
+  app.get('/posting-authorizations/new', async (request, response, next) => {
+    try {
+      if (!postingAuthorization.enabled) throw httpError(404, 'Not found.');
+      const board = await service.publicBoard(request.query.board);
+      if (!board || !board.enabled) throw httpError(404, 'Board not found.');
+      const threadId = Number(request.query.threadId) || 0;
+      if (!Number.isSafeInteger(threadId) || threadId < 0) throw httpError(400, 'Invalid thread.');
+      if (threadId) {
+        const thread = (await service.publicThread(threadId, board.id))?.thread;
+        if (!thread || thread.boardId !== board.id || thread.locked || thread.archived) {
+          throw httpError(404, 'Thread not found.');
+        }
+      }
+      const returnTo = safeRedirect(request.query.returnTo, threadId
+        ? `${renderer.threadPath(board, threadId)}#reply-form-${threadId}`
+        : `${renderer.boardPath(board)}#post-form`);
+      response.setHeader('Cache-Control', 'no-store');
+      response.send(renderer.postingAuthorizationPage(board, threadId, returnTo));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post(
+    '/posting-authorizations',
+    rateLimit('captchaAuthorization', 'Too many posting authorization attempts. Try again later.'),
+    async (request, response, next) => {
       try {
-        limiter.check(clientKey(request));
-        next();
+        if (!postingAuthorization.enabled) throw httpError(404, 'Not found.');
+        const board = await service.publicBoard(request.body.board);
+        if (!board || !board.enabled) throw httpError(404, 'Board not found.');
+        const threadId = Number(request.body.threadId) || 0;
+        if (!Number.isSafeInteger(threadId) || threadId < 0) throw httpError(400, 'Invalid thread.');
+        if (threadId) {
+          const thread = (await service.publicThread(threadId, board.id))?.thread;
+          if (!thread || thread.boardId !== board.id || thread.locked || thread.archived) {
+            throw httpError(404, 'Thread not found.');
+          }
+        }
+        await antiAbuse.verify(request.body['cf-turnstile-response']);
+        const authorization = await postingAuthorization.issue({
+          boardUri: board.uri,
+          threadId,
+          addressKey: abuseIdentity(request, 'posting-authorization')
+        });
+        postingAuthorization.setCookie(request, response, authorization.token);
+        response.setHeader('Cache-Control', 'no-store');
+        if (isJsonRequest(request)) {
+          response.status(201).json({
+            ok: true,
+            token: authorization.token,
+            expiresAt: authorization.expiresAt
+          });
+        } else {
+          response.redirect(303, safeRedirect(request.body.returnTo, `/${board.uri}/`));
+        }
       } catch (error) {
         next(error);
       }
-    };
+    }
+  );
+
+  async function requirePostingAuthorization(request, response, next) {
+    if (!postingAuthorization.enabled) {
+      next();
+      return;
+    }
+    try {
+      const boardUri = String(request.params.boardUri || request.query.board || '').toLowerCase();
+      const rawThreadId = String(request.query.threadId || '0');
+      if (!/^\d+$/.test(rawThreadId)) throw httpError(403, 'Posting authorization is required.');
+      const threadId = Number(rawThreadId);
+      const authorization = await postingAuthorization.consume(request, {
+        boardUri,
+        threadId,
+        addressKey: abuseIdentity(request, 'posting-authorization')
+      });
+      postingAuthorization.clearCookie(request, response);
+      if (!authorization) throw httpError(403, 'Posting authorization is invalid, expired, or already used.');
+      request.postAuthorization = authorization;
+      next();
+    } catch (error) {
+      next(error);
+    }
   }
 
   function postHandler(forceReply = false, staffOnly = false) {
     return async (request, response, next) => {
       const files = uploads.filesFromRequest(request);
       const media = [];
+      let postCommitted = false;
       try {
         const boardUri = request.board?.uri || request.body.board;
-        let board = boardUri ? service.getBoard(boardUri) : null;
-        if (!board) board = service.getDefaultBoard();
+        let board = request.board || (boardUri ? await service.publicBoard(boardUri) : null);
+        if (!board) board = await service.publicDefaultBoard();
         if (!board || !board.enabled) throw httpError(404, 'Board not found.');
+
+        const maximumAttachments = service.boardSetting(
+          board,
+          'maxFilesPerPost',
+          config.limits.maxFilesPerPost
+        );
+        if (files.length > maximumAttachments) {
+          throw httpError(400, `This board allows at most ${maximumAttachments} attachment${maximumAttachments === 1 ? '' : 's'} per post.`);
+        }
 
         if (String(request.body.website || '').trim()) throw httpError(400, 'Post rejected.');
         if (!staffOnly && request.body.capcode !== undefined) {
@@ -342,8 +506,22 @@ function createApp(overrides = {}) {
           requireCsrf(request);
           requirePermission(request, 'posts.capcode', board.id);
         }
-        if (!staffOnly) {
+        if (!staffOnly && !postingAuthorization.enabled) {
           await antiAbuse.verify(request.body['cf-turnstile-response']);
+        }
+
+        const threadId = Number.parseInt(request.body.threadId || request.body.resto, 10) || 0;
+        if (!staffOnly && request.postAuthorization
+          && (request.postAuthorization.board !== board.uri
+            || Number(request.postAuthorization.thread) !== threadId)) {
+          throw httpError(403, 'Posting authorization scope does not match this post.');
+        }
+        if (!staffOnly && files.length) {
+          await rateLimiter.consume(
+            'mediaPost',
+            abuseIdentity(request, 'rate:mediaPost'),
+            'Too many media posts from this address. Try again later.'
+          );
         }
 
         for (const file of files) {
@@ -365,7 +543,7 @@ function createApp(overrides = {}) {
             sha256: candidate.sha256
           });
         }
-        const threadId = Number.parseInt(request.body.threadId || request.body.resto, 10) || 0;
+        await mediaSafety.evaluate(board, media);
         await hooks.runBlocking('beforePost', {
           boardUri: board.uri,
           threadId,
@@ -383,11 +561,12 @@ function createApp(overrides = {}) {
             sha256: candidate.sha256
           }))
         });
+        await Promise.all(media.map(candidate => uploads.approveCandidate(candidate)));
         const capcodeValues = Array.isArray(request.body.capcode)
           ? request.body.capcode
           : [request.body.capcode];
         const context = {
-          clientKey: clientKey(request),
+          clientKey: abuseIdentity(request, 'poster'),
           ...(staffOnly ? {
             actor: request.staff,
             capcode: capcodeValues.includes('1')
@@ -396,6 +575,7 @@ function createApp(overrides = {}) {
         const result = await (forceReply || threadId
           ? service.createReply(threadId, request.body, media, { ...context, boardUri: board.uri })
           : service.createThread(request.body, media, { ...context, boardId: board.id }));
+        postCommitted = true;
         hooks.notify('afterPost', {
           boardUri: board.uri,
           threadId: result.threadId,
@@ -411,17 +591,17 @@ function createApp(overrides = {}) {
           response.redirect(303, safeRedirect(request.body.redirectTo, location));
         }
       } catch (error) {
-        for (const candidate of media) uploads.removeCandidate(candidate);
+        if (!postCommitted) await Promise.all(media.map(candidate => uploads.removeCandidate(candidate)));
         for (const file of files) uploads.removePath(file?.path);
         next(error);
       }
     };
   }
 
-  app.post(['/post', '/post.php'], rateLimit(postLimiter), uploads.middleware, postHandler(false));
-  app.post('/reply', rateLimit(postLimiter), uploads.middleware, postHandler(true));
+  app.post(['/post', '/post.php'], postRateLimit, requirePostingAuthorization, uploads.middleware, postHandler(false));
+  app.post('/reply', postRateLimit, requirePostingAuthorization, uploads.middleware, postHandler(true));
 
-  app.post('/delete', async (request, response, next) => {
+  app.post('/delete', rateLimit('deletePassword', 'Too many deletion attempts. Try again later.'), async (request, response, next) => {
     try {
       const result = await service.deleteByPassword(request.body.postIds, request.body.password || request.body.pwd, Boolean(request.body.fileOnly));
       if (isJsonRequest(request)) response.json({ ok: true, ...result });
@@ -431,11 +611,11 @@ function createApp(overrides = {}) {
     }
   });
 
-  app.post('/report', rateLimit(reportLimiter), async (request, response, next) => {
+  app.post('/report', rateLimit('reportCreate', 'Too many reports from this address. Try again later.'), async (request, response, next) => {
     try {
       const report = await service.reportPost(request.body.postId, request.body.reason, {
         category: request.body.category,
-        clientKey: clientKey(request)
+        clientKey: abuseIdentity(request, 'reporter')
       });
       hooks.notify('reportCreated', {
         reportId: report.id,
@@ -466,7 +646,7 @@ function createApp(overrides = {}) {
     }
   });
 
-  app.post('/appeals/:appealId', rateLimit(reportLimiter), async (request, response, next) => {
+  app.post('/appeals/:appealId', rateLimit('reportCreate', 'Too many appeal attempts. Try again later.'), async (request, response, next) => {
     try {
       await service.submitAppeal(request.params.appealId, request.body.message);
       response.redirect(303, `/appeals/${encodeURIComponent(request.params.appealId)}`);
@@ -475,7 +655,7 @@ function createApp(overrides = {}) {
     }
   });
 
-  function requireAdmin(request, response, next) {
+  async function requireAdmin(request, response, next) {
     if (!admin.configured) {
       response.status(404).send('Not found');
       return;
@@ -485,7 +665,7 @@ function createApp(overrides = {}) {
       response.redirect(303, '/admin/login');
       return;
     }
-    const staff = service.resolveStaffSession(session);
+    const staff = await service.resolveStaffSessionFresh(session);
     if (!staff) {
       admin.clearCookie(request, response);
       response.redirect(303, '/admin/login');
@@ -493,12 +673,25 @@ function createApp(overrides = {}) {
     }
     request.adminSession = session;
     request.staff = staff;
+    const repositoryBackedQueue = request.path === '/admin/reports'
+      || request.path === '/admin/dismiss-report'
+      || request.path === '/admin/appeals'
+      || request.path === '/admin/trash'
+      || request.path === '/admin/revisions'
+      || request.path.startsWith('/admin/reports/');
+    if (!repositoryBackedQueue && store.cacheDirty && typeof store.refreshCache === 'function') {
+      await store.refreshCache();
+    }
     response.setHeader('Cache-Control', 'no-store');
     next();
   }
 
   function requireCsrf(request) {
     if (!admin.verifyCsrf(request)) throw httpError(403, 'Invalid admin form token.');
+  }
+
+  function staffActionContext(request) {
+    return { actor: request.staff, requestId: request.id, actionId: crypto.randomUUID() };
   }
 
   function requirePermission(request, permission, boardId = '') {
@@ -511,12 +704,6 @@ function createApp(overrides = {}) {
     const target = findPost(data, postId);
     if (!target) throw httpError(404, 'Post not found.');
     return target;
-  }
-
-  function reportById(reportId, data = service.getData()) {
-    const report = data.reports.find(item => item.id === String(reportId || ''));
-    if (!report) throw httpError(404, 'Report not found.');
-    return report;
   }
 
   app.get('/admin/login', (request, response) => {
@@ -535,14 +722,18 @@ function createApp(overrides = {}) {
   app.post('/admin/login', async (request, response, next) => {
     try {
       if (!admin.configured) throw httpError(404, 'Not found.');
-      adminLoginLimiter.check(clientKey(request));
+      await rateLimiter.consume(
+        'adminLogin',
+        abuseIdentity(request, 'rate:adminLogin'),
+        'Too many login attempts. Try again later.'
+      );
       const username = String(request.body.username || '').trim();
       const account = username
-        ? await service.authenticateStaff(username, request.body.password)
+        ? await service.authenticateStaff(username, request.body.password, request.body.mfaCode)
         : null;
       const legacyLogin = !username && admin.verifyPassword(request.body.password);
       if (!account && !legacyLogin) {
-        response.status(401).send(renderer.adminLogin('Wrong username or password.'));
+        response.status(401).send(renderer.adminLogin('Wrong username, password, or authentication code.'));
         return;
       }
       admin.setCookie(request, response, admin.createToken(account ? {
@@ -575,39 +766,68 @@ function createApp(overrides = {}) {
     ));
   });
 
-  app.get('/admin/reports', requireAdmin, (request, response) => {
+  app.get('/admin/reports', requireAdmin, async (request, response) => {
     requirePermission(request, 'reports.manage');
-    response.send(renderer.adminReports(service.moderationDataFor(request.staff), admin.csrf(request.adminSession), {
+    const filters = {
       status: String(request.query.status || ''),
-      boardId: String(request.query.board || '')
+      boardId: String(request.query.board || ''),
+      page: String(request.query.page || '')
+    };
+    const view = await service.moderationQueueFor(request.staff, 'reports', filters);
+    response.send(renderer.adminReports(view.data, admin.csrf(request.adminSession), {
+      ...filters,
+      pageInfo: view.pageInfo
     }, request.staff));
   });
 
-  app.get('/admin/appeals', requireAdmin, (request, response) => {
+  app.get('/admin/appeals', requireAdmin, async (request, response) => {
     requirePermission(request, 'reports.manage');
+    const filters = { status: String(request.query.status || ''), page: String(request.query.page || '') };
+    const view = await service.moderationQueueFor(request.staff, 'appeals', filters);
     response.send(renderer.adminAppeals(
-      service.moderationDataFor(request.staff),
+      view.data,
       admin.csrf(request.adminSession),
-      { status: String(request.query.status || '') },
+      { ...filters, pageInfo: view.pageInfo },
       request.staff
     ));
   });
 
-  app.get('/admin/trash', requireAdmin, (request, response) => {
+  app.get('/admin/trash', requireAdmin, async (request, response) => {
     requirePermission(request, 'posts.delete');
+    const filters = { page: String(request.query.page || '') };
+    const view = await service.moderationQueueFor(request.staff, 'trash', filters);
     response.send(renderer.adminTrash(
-      service.moderationDataFor(request.staff),
+      view.data,
       admin.csrf(request.adminSession),
-      request.staff
+      request.staff,
+      { ...filters, pageInfo: view.pageInfo }
     ));
   });
 
-  app.get('/admin/revisions', requireAdmin, (request, response) => {
-    requirePermission(request, 'posts.edit');
-    response.send(renderer.adminRevisions(
+  app.get('/admin/media', requireAdmin, (request, response) => {
+    requirePermission(request, 'posts.delete');
+    response.send(renderer.adminMedia(
       service.moderationDataFor(request.staff),
       admin.csrf(request.adminSession),
-      { postId: request.query.postId },
+      {
+        state: String(request.query.state || ''),
+        boardId: String(request.query.board || ''),
+        postId: String(request.query.postId || ''),
+        page: String(request.query.page || '')
+      },
+      request.staff,
+      { worker: uploads.workerStatus(), storage: uploads.storageStatus() }
+    ));
+  });
+
+  app.get('/admin/revisions', requireAdmin, async (request, response) => {
+    requirePermission(request, 'posts.edit');
+    const filters = { postId: request.query.postId, page: String(request.query.page || '') };
+    const view = await service.moderationQueueFor(request.staff, 'revisions', filters);
+    response.send(renderer.adminRevisions(
+      view.data,
+      admin.csrf(request.adminSession),
+      { ...filters, pageInfo: view.pageInfo },
       request.staff
     ));
   });
@@ -649,7 +869,13 @@ function createApp(overrides = {}) {
     response.send(renderer.adminPostForm(board, thread, admin.csrf(request.adminSession), request.staff));
   });
 
-  app.post('/admin/post', requireAdmin, rateLimit(postLimiter), uploads.middleware, postHandler(false, true));
+  app.post(
+    '/admin/post',
+    requireAdmin,
+    staffRateLimit('apiMutation', 'Too many staff posting actions. Wait and try again.'),
+    uploads.middleware,
+    postHandler(false, true)
+  );
 
   app.get('/admin/boards/:uri/rules', requireAdmin, (request, response) => {
     requirePermission(request, 'boards.manage');
@@ -798,9 +1024,8 @@ function createApp(overrides = {}) {
   app.post('/admin/dismiss-report', requireAdmin, async (request, response, next) => {
     try {
       requireCsrf(request);
-      const report = reportById(request.body.reportId);
-      requirePermission(request, 'reports.manage', report.boardId);
-      await service.dismissReport(request.body.reportId, { actor: request.staff });
+      requirePermission(request, 'reports.manage');
+      await service.dismissReport(request.body.reportId, staffActionContext(request));
       response.redirect(303, '/admin');
     } catch (error) {
       next(error);
@@ -810,13 +1035,12 @@ function createApp(overrides = {}) {
   app.post('/admin/reports/resolve', requireAdmin, async (request, response, next) => {
     try {
       requireCsrf(request);
-      const report = reportById(request.body.reportId);
-      requirePermission(request, 'reports.manage', report.boardId);
+      requirePermission(request, 'reports.manage');
       await service.resolveReport(
         request.body.reportId,
         request.body.resolution,
         request.body.note,
-        { actor: request.staff }
+        staffActionContext(request)
       );
       response.redirect(303, '/admin/reports');
     } catch (error) {
@@ -827,9 +1051,8 @@ function createApp(overrides = {}) {
   app.post('/admin/reports/reopen', requireAdmin, async (request, response, next) => {
     try {
       requireCsrf(request);
-      const report = reportById(request.body.reportId);
-      requirePermission(request, 'reports.manage', report.boardId);
-      await service.reopenReport(request.body.reportId, { actor: request.staff });
+      requirePermission(request, 'reports.manage');
+      await service.reopenReport(request.body.reportId, staffActionContext(request));
       response.redirect(303, '/admin/reports?status=closed');
     } catch (error) {
       next(error);
@@ -892,6 +1115,32 @@ function createApp(overrides = {}) {
     }
   });
 
+  app.post('/admin/media/hash-ban', requireAdmin, async (request, response, next) => {
+    try {
+      requireCsrf(request);
+      requirePermission(
+        request,
+        'bans.manage',
+        request.body.scope === 'board' ? String(request.body.boardId || '') : ''
+      );
+      await service.createMediaHashBan(request.body, { actor: request.staff });
+      response.redirect(303, '/admin/media');
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post('/admin/media/hash-unban', requireAdmin, async (request, response, next) => {
+    try {
+      requireCsrf(request);
+      requirePermission(request, 'bans.manage');
+      await service.liftMediaHashBan(request.body.hashBanId, { actor: request.staff });
+      response.redirect(303, '/admin/media');
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.post('/admin/appeals/resolve', requireAdmin, async (request, response, next) => {
     try {
       requireCsrf(request);
@@ -908,7 +1157,11 @@ function createApp(overrides = {}) {
     }
   });
 
-  app.post('/admin/boards/add', requireAdmin, async (request, response, next) => {
+  app.post(
+    '/admin/boards/add',
+    requireAdmin,
+    staffRateLimit('boardCreate', 'Too many board creation attempts. Try again later.'),
+    async (request, response, next) => {
     try {
       requireCsrf(request);
       requirePermission(request, 'boards.manage');
@@ -917,7 +1170,8 @@ function createApp(overrides = {}) {
     } catch (error) {
       next(error);
     }
-  });
+    }
+  );
 
   app.post('/admin/boards/edit', requireAdmin, async (request, response, next) => {
     try {
@@ -931,6 +1185,8 @@ function createApp(overrides = {}) {
         enabled: request.body.enabled
       };
       if (request.body.settingsForm === '1') {
+        changes.tags = request.body.tags;
+        changes.sfw = request.body.sfw;
         changes.settings = {
           requireImageForThread: optionalBoolean(request.body.requireImageForThread),
           allowVideoUploads: optionalBoolean(request.body.allowVideoUploads),
@@ -1024,6 +1280,30 @@ function createApp(overrides = {}) {
     }
   });
 
+  app.post('/admin/boards/filters/add', requireAdmin, async (request, response, next) => {
+    try {
+      requireCsrf(request);
+      requirePermission(request, 'boards.manage');
+      const filter = await service.addBoardFilter(request.body.uri, request.body, { actor: request.staff });
+      const board = service.getBoard(request.body.uri);
+      response.redirect(303, `/admin/boards/${encodeURIComponent(board.uri)}/settings#filter-${encodeURIComponent(filter.id)}`);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post('/admin/boards/filters/delete', requireAdmin, async (request, response, next) => {
+    try {
+      requireCsrf(request);
+      requirePermission(request, 'boards.manage');
+      await service.deleteBoardFilter(request.body.uri, request.body.filterId, { actor: request.staff });
+      const board = service.getBoard(request.body.uri);
+      response.redirect(303, `/admin/boards/${encodeURIComponent(board.uri)}/settings`);
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.post('/admin/boards/delete', requireAdmin, async (request, response, next) => {
     try {
       requireCsrf(request);
@@ -1096,11 +1376,59 @@ function createApp(overrides = {}) {
     }
   });
 
-  function resolveBoard(request, response, next, value) {
-    const board = service.getBoard(value);
-    if (!board || !board.enabled) return next(httpError(404, 'Board not found.'));
-    request.board = board;
-    next();
+  app.post('/admin/account/mfa/setup', requireAdmin, async (request, response, next) => {
+    try {
+      requireCsrf(request);
+      requirePermission(request, 'dashboard.view');
+      const enrollment = await service.beginStaffMfa(request.body.currentPassword, request.staff);
+      response.setHeader('Cache-Control', 'no-store');
+      response.send(renderer.adminMfaSetup(
+        request.staff,
+        admin.csrf(request.adminSession),
+        enrollment
+      ));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post('/admin/account/mfa/confirm', requireAdmin, async (request, response, next) => {
+    try {
+      requireCsrf(request);
+      requirePermission(request, 'dashboard.view');
+      await service.confirmStaffMfa(request.body.mfaCode, request.staff);
+      admin.clearCookie(request, response);
+      response.redirect(303, '/admin/login');
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post('/admin/account/mfa/disable', requireAdmin, async (request, response, next) => {
+    try {
+      requireCsrf(request);
+      requirePermission(request, 'dashboard.view');
+      await service.disableStaffMfa(
+        request.body.currentPassword,
+        request.body.mfaCode,
+        request.staff
+      );
+      admin.clearCookie(request, response);
+      response.redirect(303, '/admin/login');
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  async function resolveBoard(request, response, next, value) {
+    try {
+      const board = await service.publicBoard(value);
+      if (!board || !board.enabled) return next(httpError(404, 'Board not found.'));
+      request.board = board;
+      next();
+    } catch (error) {
+      next(error);
+    }
   }
 
   app.param('boardUri', resolveBoard);
@@ -1109,74 +1437,70 @@ function createApp(overrides = {}) {
     app.get('/:boardUri/rules.json', (request, response) => {
       apiResponse(response, request.board.rules.map(rule => rule.text));
     });
-    app.get('/:boardUri/catalog.json', (request, response) => {
-      const data = service.getData();
-      apiResponse(response, apiCatalog(service, data, request.board));
+    app.get('/:boardUri/catalog.json', async (request, response) => {
+      const view = await service.publicCatalog(request.board, request.query.page);
+      apiResponse(response, apiCatalog(service, view.data, request.board));
     });
-    app.get('/:boardUri/threads.json', (request, response) => {
-      const data = service.getData();
-      apiResponse(response, apiThreads(service, data, request.board));
+    app.get('/:boardUri/threads.json', async (request, response) => {
+      const view = await service.publicCatalog(request.board, request.query.page);
+      apiResponse(response, apiThreads(service, view.data, request.board));
     });
-    app.get('/:boardUri/archive.json', (request, response) => {
-      const data = service.getData();
-      apiResponse(response, service.getArchivedThreads(data, request.board.id).map(thread => thread.id));
+    app.get('/:boardUri/archive.json', async (request, response) => {
+      const view = await service.publicArchive(request.board, request.query.page);
+      apiResponse(response, view.threads.map(thread => thread.id));
     });
-    app.get('/:boardUri/index.json', (request, response) => {
-      const page = service.getPage(1, request.board.uri);
+    app.get('/:boardUri/index.json', async (request, response) => {
+      const page = await service.publicBoardPage(request.board, 1);
       if (!page) throw httpError(404, 'Board page not found.');
       apiResponse(response, { threads: page.threads.map(thread => apiThread(thread, page.data, config, request.board, true)) });
     });
-    app.get('/:boardUri/thread/:id.json', (request, response) => {
-      const data = service.getData();
-      const thread = service.getThread(request.params.id, data);
-      if (!thread || thread.boardId !== request.board.id) throw httpError(404, 'Thread not found.');
-      apiResponse(response, apiThread(thread, data, config, request.board));
+    app.get('/:boardUri/thread/:id.json', async (request, response) => {
+      const view = await service.publicThread(request.params.id, request.board.id);
+      if (!view) throw httpError(404, 'Thread not found.');
+      apiResponse(response, apiThread(view.thread, view.data, config, request.board));
     });
-    app.get('/:boardUri/res/:id.json', (request, response) => {
-      const data = service.getData();
-      const thread = service.getThread(request.params.id, data);
-      if (!thread || thread.boardId !== request.board.id) throw httpError(404, 'Thread not found.');
-      apiResponse(response, apiThread(thread, data, config, request.board));
+    app.get('/:boardUri/res/:id.json', async (request, response) => {
+      const view = await service.publicThread(request.params.id, request.board.id);
+      if (!view) throw httpError(404, 'Thread not found.');
+      apiResponse(response, apiThread(view.thread, view.data, config, request.board));
     });
-    app.get('/:boardUri/:page.json', (request, response) => {
+    app.get('/:boardUri/:page.json', async (request, response) => {
       const pageNumber = Number(request.params.page) === 0 ? 1 : request.params.page;
-      const page = service.getPage(pageNumber, request.board.uri);
+      const page = await service.publicBoardPage(request.board, pageNumber);
       if (!page) throw httpError(404, 'Board page not found.');
       apiResponse(response, { threads: page.threads.map(thread => apiThread(thread, page.data, config, request.board, true)) });
     });
   }
 
-  app.post('/:boardUri/post', rateLimit(postLimiter), uploads.middleware, postHandler(false));
-  app.post('/:boardUri/post.php', rateLimit(postLimiter), uploads.middleware, postHandler(false));
+  app.post('/:boardUri/post', postRateLimit, requirePostingAuthorization, uploads.middleware, postHandler(false));
+  app.post('/:boardUri/post.php', postRateLimit, requirePostingAuthorization, uploads.middleware, postHandler(false));
 
   app.get('/:boardUri/', (request, response) => renderBoardPage(request.board, 1, response));
   app.get('/:boardUri/index.html', (request, response) => renderBoardPage(request.board, 1, response));
-  app.get('/:boardUri/catalog', (request, response) => {
-    const data = service.getData();
-    const threads = service.getSortedThreads(data, request.board.id);
-    response.send(renderer.catalog(data, threads, request.board, service.getStats(data, request.board.uri)));
+  app.get('/:boardUri/catalog', async (request, response) => {
+    const view = await service.publicCatalog(request.board, request.query.page);
+    response.send(renderer.catalog(view.data, view.threads, request.board, view.stats, view));
   });
-  app.get('/:boardUri/catalog.html', (request, response) => {
-    const data = service.getData();
-    const threads = service.getSortedThreads(data, request.board.id);
-    response.send(renderer.catalog(data, threads, request.board, service.getStats(data, request.board.uri)));
+  app.get('/:boardUri/catalog.html', async (request, response) => {
+    const view = await service.publicCatalog(request.board, request.query.page);
+    response.send(renderer.catalog(view.data, view.threads, request.board, view.stats, view));
   });
-  app.get(['/:boardUri/archive', '/:boardUri/archive.html'], (request, response) => {
-    const data = service.getData();
-    const threads = service.getArchivedThreads(data, request.board.id);
-    response.send(renderer.archive(threads, request.board, service.getStats(data, request.board.uri)));
+  app.get(['/:boardUri/archive', '/:boardUri/archive.html'], async (request, response) => {
+    const view = await service.publicArchive(request.board, request.query.page);
+    response.send(renderer.archive(view.threads, request.board, view.stats, view));
   });
-  app.get(['/:boardUri/rules', '/:boardUri/rules.html'], (request, response) => {
-    const data = service.getData();
-    const board = service.getBoard(request.board.uri, data);
-    response.send(renderer.boardRules(board, service.getStats(data, board.uri)));
+  app.get(['/:boardUri/rules', '/:boardUri/rules.html'], async (request, response) => {
+    const stats = service.usesTargetedQueries
+      ? await store.boardStats(request.board.id)
+      : service.getStats(service.getData(), request.board.uri);
+    response.send(renderer.boardRules(request.board, stats));
   });
   app.get('/:boardUri/:page.html', (request, response) => renderBoardPage(request.board, request.params.page, response));
-  app.get('/:boardUri/thread/:id', (request, response) => renderThread(request, response, request.board.uri));
-  app.get('/:boardUri/res/:id.html', (request, response) => renderThread(request, response, request.board.uri));
+  app.get('/:boardUri/thread/:id', (request, response) => renderThread(request, response, request.board.id));
+  app.get('/:boardUri/res/:id.html', (request, response) => renderThread(request, response, request.board.id));
 
   app.use((request, response) => {
-    response.status(404).send(renderer.message('Not found', 'That page or thread does not exist.', service.getSiteStats(), '/'));
+    response.status(404).send(renderer.message('Not found', 'That page or thread does not exist.', { line: '' }, '/'));
   });
 
   app.use((error, request, response, next) => {
@@ -1185,17 +1509,31 @@ function createApp(overrides = {}) {
       return;
     }
     const isTooLarge = error.code === 'LIMIT_FILE_SIZE';
-    const status = isTooLarge ? 413 : (Number(error.status) || 400);
+    const suppliedStatus = Number(error.status);
+    const status = isTooLarge
+      ? 413
+      : (suppliedStatus >= 400 && suppliedStatus <= 599 ? suppliedStatus : 500);
     const message = isTooLarge
       ? `Uploads are limited to ${Math.max(config.limits.maxFileBytes, config.limits.maxVideoBytes)} bytes.`
-      : error.message;
+      : (status >= 500 ? 'The server could not complete this request. Try again later.' : error.message);
+    if (status >= 500) {
+      (overrides.logger || console).error(JSON.stringify({
+        level: 'error',
+        category: 'request-failure',
+        requestId: request.id,
+        method: request.method,
+        path: request.path,
+        status,
+        error: String(error?.message || 'Unknown error').slice(0, 1000)
+      }));
+    }
     response.status(status);
     if (isJsonRequest(request)) {
       response.json({ ok: false, error: message, ...(error.appealUrl ? { appealUrl: error.appealUrl } : {}) });
     } else response.send(renderer.message(
       status >= 500 ? 'Server error' : 'Request failed',
       message,
-      service.getSiteStats(),
+      { line: '' },
       safeRedirect(request.get('referer'), '/'),
       error.appealUrl ? { actionHref: error.appealUrl, actionLabel: 'Appeal this restriction' } : {}
     ));
@@ -1209,6 +1547,12 @@ function createApp(overrides = {}) {
     renderer,
     i18n,
     antiAbuse,
+    mediaSafety,
+    clientAddresses,
+    rateLimiter,
+    rateLimitStore,
+    postingAuthorization,
+    authorizationNonceStore,
     hooks,
     maintenance
   };

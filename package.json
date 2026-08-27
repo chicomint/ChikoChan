@@ -8,6 +8,11 @@
     "start:local": "node scripts/start-local.js",
     "dev": "node --watch server.js",
     "migrate:mongo": "node scripts/migrate-to-mongo.js",
+    "verify:upgrade": "node scripts/verify-upgrade.js",
+    "backup:local": "node scripts/backup-local.js",
+    "restore:local": "node scripts/restore-local.js",
+    "seed:load": "node scripts/seed-load-fixture.js",
+    "load:test": "node scripts/load-benchmark.js",
     "diagnose": "node scripts/diagnose.js",
     "test": "node --test",
     "check": "node --check server.js && node --check app.js && node --check client.js"

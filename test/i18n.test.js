@@ -8,7 +8,12 @@ const test = require('node:test');
 const { loadConfig } = require('../config');
 const { Translator } = require('../lib/i18n');
 const { Renderer } = require('../lib/render');
-const { formatDate } = require('../lib/utils');
+const { formatDate, relativeTime } = require('../lib/utils');
+
+const SECOND = 1000;
+const MINUTE = 60 * SECOND;
+const HOUR = 60 * MINUTE;
+const DAY = 24 * HOUR;
 
 test('the default English catalog preserves date output and supports bounded interpolation', () => {
   const translator = new Translator(loadConfig(), {
@@ -22,6 +27,42 @@ test('the default English catalog preserves date output and supports bounded int
   assert.equal(translator.t('extension.sample.greeting', { name: 'Chiko' }), 'Hello, Chiko!');
   assert.equal(translator.formatDate(timestamp), formatDate(timestamp));
   assert.equal(translator.t('missing.translation'), 'missing.translation');
+});
+
+test('relative post times cover safe second through year boundaries and plural forms', () => {
+  const now = Date.UTC(2026, 7, 27, 12, 0, 0);
+  const cases = [
+    [1 * SECOND, '1 sec ago'],
+    [30 * SECOND, '30 sec ago'],
+    [1 * MINUTE, '1 minute ago'],
+    [2 * MINUTE, '2 minutes ago'],
+    [1 * HOUR, '1 hour ago'],
+    [3 * HOUR, '3 hours ago'],
+    [1 * DAY, '1 day ago'],
+    [9 * DAY, '9 days ago'],
+    [30 * DAY, '1 month ago'],
+    [60 * DAY, '2 months ago'],
+    [365 * DAY, '1 year ago'],
+    [3 * 365 * DAY, '3 years ago']
+  ];
+  for (const [elapsed, expected] of cases) {
+    assert.equal(relativeTime(now - elapsed, now), expected);
+  }
+  assert.equal(relativeTime(now + SECOND, now), 'just now');
+  assert.equal(relativeTime('not-a-timestamp', now), 'Unknown time');
+  assert.equal(relativeTime(now, 'not-a-timestamp'), 'Unknown time');
+});
+
+test('semantic relative time preserves the exact timestamp for hover and accessibility', () => {
+  const config = loadConfig();
+  const translator = new Translator(config);
+  const renderer = new Renderer(config, null, translator);
+  const timestamp = Date.now() - (9 * DAY);
+  const html = renderer.timeHTML(timestamp, 'date-time dateTime');
+
+  assert.match(html, /^<time class="date-time dateTime" datetime="[^\"]+" title="[^\"]+" aria-label="9 days ago\. Exact time: [^\"]+">9 days ago<\/time>$/);
+  assert.match(html, new RegExp(`datetime="${new Date(timestamp).toISOString().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`));
+  assert.equal(renderer.timeHTML('invalid', 'date-time'), '<time class="date-time">Unknown time</time>');
 });
 
 test('fixed locale files fall back by base language and renderer escapes translated text', t => {

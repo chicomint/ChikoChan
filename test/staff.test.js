@@ -6,6 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { createApp } = require('../app');
+const { totpAt } = require('../lib/mfa');
 const { canAssignRole, canManageAccount, staffCan } = require('../lib/staff');
 
 const ONE_PIXEL_PNG = Buffer.from(
@@ -13,14 +14,15 @@ const ONE_PIXEL_PNG = Buffer.from(
   'base64'
 );
 
-async function testServer(t) {
+async function testServer(t, overrides = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'chikochan-staff-'));
   const app = createApp({
     storage: 'json',
     dataDir: directory,
     limits: { postRateLimit: 100, reportRateLimit: 100 },
     adminPassword: 'root-environment-password',
-    adminSessionSecret: 'staff-test-session-secret'
+    adminSessionSecret: 'staff-test-session-secret',
+    ...overrides
   });
   let server;
   const address = await new Promise((resolve, reject) => {
@@ -36,12 +38,12 @@ async function testServer(t) {
   return { app, directory, url: `http://127.0.0.1:${address.port}` };
 }
 
-async function login(url, password, username = '') {
+async function login(url, password, username = '', mfaCode = '') {
   const response = await fetch(`${url}/admin/login`, {
     method: 'POST',
     redirect: 'manual',
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ username, password })
+    body: new URLSearchParams({ username, password, mfaCode })
   });
   return {
     response,
@@ -302,4 +304,78 @@ test('named administrators can manage lower roles but cannot create peer or root
   });
   assert.equal(selfDisable.status, 403);
   assert.deepEqual(accounts.map(account => account.username), ['board.mod', 'named.admin']);
+});
+
+test('named staff can enroll encrypted TOTP MFA and consume one-time recovery codes', async t => {
+  const server = await testServer(t, {
+    staffMfa: {
+      enabled: true,
+      issuer: 'ChikoChan Test',
+      encryptionKey: '11'.repeat(32)
+    }
+  });
+  const rootLogin = await login(server.url, 'root-environment-password');
+  const rootPage = await csrfAt(server.url, rootLogin.cookie);
+  const createModerator = await postForm(server.url, '/admin/staff/add', rootLogin.cookie, {
+    csrf: rootPage.csrf,
+    username: 'mfa.mod',
+    displayName: 'MFA Moderator',
+    password: 'mfa-moderator-password',
+    role: 'moderator',
+    scope: 'boards',
+    boardIds: 'chiko'
+  });
+  assert.equal(createModerator.status, 303, await createModerator.text());
+
+  const firstLogin = await login(server.url, 'mfa-moderator-password', 'mfa.mod');
+  assert.equal(firstLogin.response.status, 303);
+  const accountPage = await csrfAt(server.url, firstLogin.cookie, '/admin/account');
+  assert.match(accountPage.html, /Start MFA setup/);
+  const setup = await postForm(server.url, '/admin/account/mfa/setup', firstLogin.cookie, {
+    csrf: accountPage.csrf,
+    currentPassword: 'mfa-moderator-password'
+  });
+  const setupHtml = await setup.text();
+  assert.equal(setup.status, 200, setupHtml);
+  const secret = /<code>([A-Z2-7]{32})<\/code>/.exec(setupHtml)?.[1];
+  const recoveryCode = /<code>([A-Z2-7]{4}(?:-[A-Z2-7]{4}){2})<\/code>/.exec(setupHtml)?.[1];
+  assert.ok(secret);
+  assert.ok(recoveryCode);
+  let storedText = fs.readFileSync(path.join(server.directory, 'posts.json'), 'utf8');
+  assert.equal(storedText.includes(secret), false);
+  assert.equal(storedText.includes(recoveryCode), false);
+  assert.match(storedText, /"mfaPendingSecret": "v1\./);
+
+  const confirm = await postForm(server.url, '/admin/account/mfa/confirm', firstLogin.cookie, {
+    csrf: accountPage.csrf,
+    mfaCode: totpAt(secret)
+  });
+  assert.equal(confirm.status, 303, await confirm.text());
+  assert.equal(confirm.headers.get('location'), '/admin/login');
+  assert.match(confirm.headers.get('set-cookie'), /Max-Age=0/);
+
+  const missingCode = await login(server.url, 'mfa-moderator-password', 'mfa.mod');
+  assert.equal(missingCode.response.status, 401);
+  const recoveryLogin = await login(server.url, 'mfa-moderator-password', 'mfa.mod', recoveryCode);
+  assert.equal(recoveryLogin.response.status, 303, await recoveryLogin.response.text());
+  const replay = await login(server.url, 'mfa-moderator-password', 'mfa.mod', recoveryCode);
+  assert.equal(replay.response.status, 401);
+
+  const enabledPage = await csrfAt(server.url, recoveryLogin.cookie, '/admin/account');
+  assert.match(enabledPage.html, /TOTP MFA is enabled/);
+  assert.equal(enabledPage.html.includes(secret), false);
+  const disable = await postForm(server.url, '/admin/account/mfa/disable', recoveryLogin.cookie, {
+    csrf: enabledPage.csrf,
+    currentPassword: 'mfa-moderator-password',
+    mfaCode: totpAt(secret)
+  });
+  assert.equal(disable.status, 303, await disable.text());
+  assert.match(disable.headers.get('set-cookie'), /Max-Age=0/);
+
+  storedText = fs.readFileSync(path.join(server.directory, 'posts.json'), 'utf8');
+  const stored = JSON.parse(storedText).staff.find(account => account.username === 'mfa.mod');
+  assert.equal(stored.mfaEnabled, false);
+  assert.equal(Object.hasOwn(stored, 'mfaSecret'), false);
+  assert.equal(Object.hasOwn(stored, 'mfaRecoveryHashes'), false);
+  assert.equal((await login(server.url, 'mfa-moderator-password', 'mfa.mod')).response.status, 303);
 });

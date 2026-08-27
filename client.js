@@ -225,6 +225,63 @@
     });
   }
 
+  function authorizationStatus(form) {
+    var container = form.querySelector('[data-turnstile-widget]');
+    if (!container) return null;
+    var status = container.querySelector('.captcha-status');
+    if (!status) {
+      status = document.createElement('span');
+      status.className = 'captcha-status';
+      container.appendChild(status);
+    }
+    return status;
+  }
+
+  async function authorizePosting(form, submitter) {
+    var status = authorizationStatus(form);
+    var captchaToken = form.querySelector('input[name="cf-turnstile-response"]');
+    if (form.hasAttribute('data-turnstile-form') && (!captchaToken || !captchaToken.value)) {
+      var captcha = renderTurnstile(form);
+      if (status) status.textContent = 'Complete human verification before posting.';
+      if (captcha) captcha.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      return;
+    }
+
+    if (submitter) submitter.disabled = true;
+    if (status) status.textContent = 'Authorizing this post…';
+    try {
+      var body = new URLSearchParams({
+        board: form.dataset.boardUri || '',
+        threadId: form.dataset.threadId || '0',
+        'cf-turnstile-response': captchaToken ? captchaToken.value : ''
+      });
+      var response = await window.fetch('/posting-authorizations', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+          'X-Requested-With': 'XMLHttpRequest'
+        },
+        body: body.toString(),
+        redirect: 'error'
+      });
+      var result = await response.json().catch(function () { return {}; });
+      if (!response.ok || result.ok !== true) throw new Error(result.error || 'Posting authorization failed.');
+      form.dataset.postingAuthorized = '1';
+      if (status) status.textContent = 'Authorized. Uploading…';
+      if (submitter && submitter.isConnected) form.requestSubmit(submitter);
+      else form.requestSubmit();
+    } catch (error) {
+      if (submitter) submitter.disabled = false;
+      if (status) status.textContent = error.message || 'Posting authorization failed. Refresh and try again.';
+      if (window.turnstile && captchaToken) {
+        var widget = form.querySelector('[data-turnstile-widget]');
+        if (widget && widget.dataset.widgetId) window.turnstile.reset(widget.dataset.widgetId);
+      }
+    }
+  }
+
   document.addEventListener('click', function (event) {
     if (event.target.closest('.theme-toggle')) {
       toggleTheme();
@@ -248,6 +305,15 @@
       event.preventDefault();
       var expanded = imageLink.classList.toggle('expanded-image');
       if (box) box.classList.toggle('image-expanded', expanded);
+      var attachment = imageLink.closest('.post-attachment');
+      if (attachment) attachment.classList.toggle('post-attachment-expanded', expanded);
+      var attachments = imageLink.closest('.post-attachments');
+      if (attachments) {
+        var hasExpandedMedia = Boolean(attachments.querySelector('.expanded-image'));
+        attachments.classList.toggle('post-attachments-expanded', hasExpandedMedia);
+        var post = attachments.closest('.post');
+        if (post) post.classList.toggle('post-media-expanded', hasExpandedMedia);
+      }
       var image = imageLink.querySelector('[data-expand-image]');
       if (image) image.src = expanded ? image.dataset.fullSrc : image.dataset.thumbnailSrc;
       return;
@@ -297,7 +363,15 @@
         return;
       }
     }
-    if (event.target.matches('form[data-turnstile-form]')) {
+    if (event.target.matches('form[data-posting-authorization]')
+      && event.target.dataset.postingAuthorized !== '1') {
+      event.preventDefault();
+      void authorizePosting(event.target, event.submitter);
+      return;
+    }
+    if (event.target.dataset.postingAuthorized === '1') {
+      delete event.target.dataset.postingAuthorized;
+    } else if (event.target.matches('form[data-turnstile-form]')) {
       var token = event.target.querySelector('input[name="cf-turnstile-response"]');
       if (!token || !token.value) {
         event.preventDefault();

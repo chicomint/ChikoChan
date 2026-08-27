@@ -440,3 +440,138 @@ test('structured customization and board policies stay escaped, typed, and board
   assert.equal(boardsApi.boards[0].user_ids, 1);
   assert.equal(boardsApi.boards[0].max_files_per_post, 2);
 });
+
+test('board tags, sfw flag, and content filters are typed, escaped, and enforced', async t => {
+  const server = await testServer(t);
+  const cookie = await adminCookie(server.url);
+  const dashboard = await fetch(`${server.url}/admin`, { headers: { cookie } });
+  const csrf = /name="csrf" value="([^"]+)"/.exec(await dashboard.text())?.[1];
+  assert.ok(csrf);
+
+  const adminPost = (route, values) => fetch(`${server.url}${route}`, {
+    method: 'POST',
+    redirect: 'manual',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', cookie },
+    body: new URLSearchParams({ csrf, ...values })
+  });
+
+  const service = server.app.locals.chikochan.service;
+
+  const badTags = await adminPost('/admin/boards/edit', {
+    uri: 'chiko',
+    settingsForm: '1',
+    tags: 'valid <script>alert(1)</script>'
+  });
+  assert.equal(badTags.status, 400);
+  assert.deepEqual(service.getData().boards[0].tags, []);
+
+  const settings = await adminPost('/admin/boards/edit', {
+    uri: 'chiko',
+    settingsForm: '1',
+    tags: 'Anime, GAMES anime retro',
+    sfw: '1'
+  });
+  assert.equal(settings.status, 303, await settings.text());
+  assert.deepEqual(service.getData().boards[0].tags, ['anime', 'games', 'retro']);
+  assert.equal(service.getData().boards[0].sfw, true);
+
+  const markNsfw = await adminPost('/admin/boards/edit', {
+    uri: 'chiko',
+    settingsForm: '1',
+    tags: 'anime',
+    sfw: '0'
+  });
+  assert.equal(markNsfw.status, 303, await markNsfw.text());
+  assert.equal(service.getData().boards[0].sfw, false);
+
+  const [boardPageHtml, boardsApi] = await Promise.all([
+    fetch(`${server.url}/chiko/`).then(response => response.text()),
+    fetch(`${server.url}/boards.json`).then(response => response.json())
+  ]);
+  assert.match(boardPageHtml, /<span class="board-tag">anime<\/span>/);
+  assert.equal(boardsApi.boards[0].ws_board, 0);
+  assert.equal(boardsApi.boards[0].sfw, false);
+  assert.deepEqual(boardsApi.boards[0].tags, ['anime']);
+
+  const noCsrf = await fetch(`${server.url}/admin/boards/filters/add`, {
+    method: 'POST',
+    redirect: 'manual',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', cookie },
+    body: new URLSearchParams({ uri: 'chiko', kind: 'literal', value: 'unauthorized' })
+  });
+  assert.equal(noCsrf.status, 403);
+  assert.equal(service.getData().boards[0].filters.length, 0);
+
+  const badKind = await adminPost('/admin/boards/filters/add', {
+    uri: 'chiko',
+    kind: 'regex',
+    value: '.*'
+  });
+  assert.equal(badKind.status, 400);
+
+  const literal = await adminPost('/admin/boards/filters/add', {
+    uri: 'chiko',
+    kind: 'literal',
+    value: 'Blocked Phrase',
+    note: 'Not allowed here.'
+  });
+  assert.equal(literal.status, 303, await literal.text());
+  const duplicate = await adminPost('/admin/boards/filters/add', {
+    uri: 'chiko',
+    kind: 'literal',
+    value: 'blocked phrase'
+  });
+  assert.equal(duplicate.status, 409);
+
+  const domain = await adminPost('/admin/boards/filters/add', {
+    uri: 'chiko',
+    kind: 'domain',
+    value: 'Spam.Example'
+  });
+  assert.equal(domain.status, 303, await domain.text());
+
+  const filters = service.getData().boards[0].filters;
+  assert.equal(filters.length, 2);
+  assert.deepEqual(filters.map(filter => [filter.kind, filter.value]), [
+    ['literal', 'Blocked Phrase'],
+    ['domain', 'spam.example']
+  ]);
+
+  async function postThread(comment) {
+    const form = new FormData();
+    form.set('sub', 'Filter probe');
+    form.set('com', comment);
+    form.set('upfile', new Blob([ONE_PIXEL_PNG], { type: 'image/png' }), 'probe.png');
+    const response = await fetch(`${server.url}/chiko/post?json=1`, { method: 'POST', body: form });
+    return { status: response.status, body: await response.text() };
+  }
+
+  const literalHit = await postThread('this contains a BLOCKED PHRASE inside');
+  assert.equal(literalHit.status, 400);
+  assert.match(literalHit.body, /Not allowed here\./);
+
+  const domainHit = await postThread('visit https://spam.example/offer now');
+  assert.equal(domainHit.status, 400);
+  const subdomainHit = await postThread('visit https://cdn.spam.example/offer now');
+  assert.equal(subdomainHit.status, 400);
+
+  const clean = await postThread('visit https://spamexample.com/ and say blocked-phrase');
+  assert.equal(clean.status, 201, clean.body);
+
+  const settingsPage = await fetch(`${server.url}/admin/boards/chiko/settings`, { headers: { cookie } });
+  const settingsHtml = await settingsPage.text();
+  assert.match(settingsHtml, /<code>Blocked Phrase<\/code>/);
+  assert.doesNotMatch(settingsHtml, /Blocked Phrase<script>/);
+
+  const remove = await adminPost('/admin/boards/filters/delete', {
+    uri: 'chiko',
+    filterId: filters[0].id
+  });
+  assert.equal(remove.status, 303, await remove.text());
+  assert.equal(service.getData().boards[0].filters.length, 1);
+  const nowAllowed = await postThread('this contains a blocked phrase inside');
+  assert.equal(nowAllowed.status, 201, nowAllowed.body);
+
+  const actions = service.getData().moderationLog.map(entry => entry.action);
+  assert.deepEqual(actions.slice(-3), ['board-filter-add', 'board-filter-add', 'board-filter-delete']);
+});

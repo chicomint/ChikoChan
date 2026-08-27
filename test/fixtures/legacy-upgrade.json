@@ -1,0 +1,126 @@
+{
+  "version": 7,
+  "lastId": 3,
+  "boards": [
+    {
+      "id": "chiko",
+      "uri": "chiko",
+      "name": "ChikoChan Legacy Fixture",
+      "description": "Synthetic upgrade data only.",
+      "createdAt": 1600000000000,
+      "rules": [
+        "Keep synthetic fixtures harmless.",
+        {
+          "id": "fixture-rule",
+          "text": "Preserve this structured rule.",
+          "createdAt": 1600000000001,
+          "updatedAt": 1600000000002
+        }
+      ]
+    }
+  ],
+  "customization": {
+    "title": "ChikoChan Fixture",
+    "announcement": "Upgrade verification fixture",
+    "navigation": [
+      {
+        "label": "Rules",
+        "href": "/rules"
+      }
+    ]
+  },
+  "threads": [
+    {
+      "id": 1,
+      "boardId": "chiko",
+      "name": "Synthetic OP",
+      "title": "Legacy fixture thread",
+      "comment": "Original fixture body",
+      "createdAt": 1600000000100,
+      "bumpedAt": 1600000000200,
+      "image": "src/synthetic.png",
+      "imageName": "synthetic.png",
+      "imageMime": "image/png",
+      "imageBytes": 68,
+      "width": 1,
+      "height": 1,
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "replies": [
+        {
+          "id": 2,
+          "name": "Synthetic Reply",
+          "comment": ">>1\nPreserve this reply and backlink.",
+          "createdAt": 1600000000200
+        }
+      ]
+    }
+  ],
+  "reports": [
+    {
+      "id": "fixture-report",
+      "postId": 2,
+      "threadId": 1,
+      "boardId": "chiko",
+      "reason": "Synthetic closed report",
+      "createdAt": 1600000000300,
+      "closedAt": 1600000000400,
+      "resolution": "dismissed",
+      "moderatorNote": "Fixture resolution retained"
+    }
+  ],
+  "bans": [
+    {
+      "id": "fixture-ban",
+      "posterKey": "PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP",
+      "reason": "Synthetic legacy sanction",
+      "createdAt": 1600000000500,
+      "active": false
+    }
+  ],
+  "trash": [
+    {
+      "id": "fixture-trash",
+      "kind": "reply",
+      "boardId": "chiko",
+      "threadId": 1,
+      "postId": 3,
+      "position": 1,
+      "post": {
+        "id": 3,
+        "name": "Synthetic Deleted Reply",
+        "comment": "Retained trash content",
+        "createdAt": 1600000000250
+      },
+      "deletedAt": 1600000000600,
+      "purgeAt": 2600000000600,
+      "deletedByName": "fixture.mod"
+    }
+  ],
+  "revisions": [
+    {
+      "id": "fixture-revision",
+      "postId": 1,
+      "threadId": 1,
+      "boardId": "chiko",
+      "before": {
+        "title": "Old fixture title",
+        "comment": "Old fixture body"
+      },
+      "after": {
+        "title": "Legacy fixture thread",
+        "comment": "Original fixture body"
+      },
+      "reason": "Synthetic correction",
+      "editedAt": 1600000000700,
+      "editedByName": "fixture.mod"
+    }
+  ],
+  "moderationLog": [
+    {
+      "id": "fixture-log",
+      "action": "fixture-action",
+      "detail": "Synthetic audit record",
+      "createdAt": 1600000000800
+    }
+  ]
+}

@@ -83,7 +83,7 @@ const DEFAULTS = {
     'This little imageboard is a place to share whatever is on your mind — cute pictures, random thoughts, memes, art, games, hobbies, and more.\n\n' +
     'Some boards have specific categories, so please make sure your posts fit the board and follow the rules: https://boards.chiko.cc/rules\n\n' +
     'Feel free to stay and have fun! ^-^',
-    announcement: 'I just update some. Sorry if it might be bug!!!'
+    announcement: ''
   },
   limits: {
     maxRequestBytes: 101 * 1024 * 1024,

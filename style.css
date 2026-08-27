@@ -355,16 +355,15 @@ hr {
 .post-attachments {
   align-items: flex-start;
   display: flex;
-  flex: 0 1 auto;
   flex-wrap: wrap;
   gap: 7px 12px;
-  margin: 0 0 10px 20px;
+  margin: 0 20px 10px;
   max-width: min(760px, calc(100vw - 30px));
   min-width: 0;
 }
 
 .reply .post-attachments {
-  margin: 0 0 8px;
+  margin: 0 20px 8px 0;
   max-width: calc(100vw - 78px);
 }
 
@@ -383,9 +382,27 @@ hr {
   margin: 0;
 }
 
+.post-attachments[data-attachment-count="1"],
+.post-attachments[data-attachment-count="1"] .post-attachment {
+  display: contents;
+}
+
+.post-attachments[data-attachment-count="1"] .image-box {
+  float: left;
+  margin: 0 20px 12px;
+}
+
+.reply .post-attachments[data-attachment-count="1"] .image-box {
+  margin-left: 0;
+}
+
 .post-attachments-multiple .post-attachment {
   border-left: 1px solid var(--reply-border);
   padding-left: 7px;
+}
+
+.post-attachments-multiple {
+  float: left;
 }
 
 .image-box {
@@ -438,19 +455,8 @@ hr {
 }
 
 .post-body {
-  align-items: flex-start;
-  display: flex;
-  flex-wrap: wrap;
   max-width: 100%;
   min-width: 0;
-}
-
-.post-body-with-media {
-  column-gap: 20px;
-}
-
-.reply .post-body-with-media {
-  column-gap: 12px;
 }
 
 .reply .comment {
@@ -458,7 +464,6 @@ hr {
 }
 
 .comment {
-  flex: 1 1 16rem;
   margin: 8px 0 12px;
   max-width: 100%;
   min-width: 0;
@@ -1014,6 +1019,14 @@ blockquote.comment {
     margin: 0;
   }
 
+  .post-attachments[data-attachment-count="1"] .image-box {
+    margin: 0 12px 10px 8px;
+  }
+
+  .reply .post-attachments[data-attachment-count="1"] .image-box {
+    margin-left: 0;
+  }
+
   .post-img {
     max-height: 145px;
     max-width: 155px;
@@ -1063,15 +1076,6 @@ blockquote.comment {
 }
 
 @media (max-width: 520px) {
-  .post-body-with-media {
-    display: block;
-  }
-
-  .post-body-with-media .comment {
-    clear: both;
-    width: 100%;
-  }
-
   .post-attachments,
   .reply .post-attachments {
     margin-left: 0;

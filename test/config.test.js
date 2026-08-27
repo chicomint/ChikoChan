@@ -53,7 +53,7 @@ test('report categories are typed, unique, and include the configured default', 
   assert.throws(() => loadConfig({ reports: { defaultCategory: 'missing' } }), /must match/);
 });
 
-test('media limits and processor commands are typed without requiring installed binaries', () => {
+test('media limits and processor commands are typed without requiring installed binaries', t => {
   const config = loadConfig({
     limits: { maxVideoBytes: 123456, maxVideoDurationSeconds: 42 },
     media: { ffprobePath: 'custom-ffprobe', ffmpegPath: 'custom-ffmpeg' }
@@ -65,6 +65,21 @@ test('media limits and processor commands are typed without requiring installed 
 
   assert.throws(() => loadConfig({ limits: { maxVideoPixels: 0 } }), /positive integer/);
   assert.throws(() => loadConfig({ media: { ffprobePath: '' } }), /non-empty command or path/);
+
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'chikochan-media-config-'));
+  const configPath = path.join(directory, 'config.json');
+  const previousPath = process.env.CHIKO_CONFIG;
+  t.after(() => {
+    restoreEnvironment('CHIKO_CONFIG', previousPath);
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+  fs.writeFileSync(configPath, JSON.stringify({
+    media: { ffprobePath: 'configured-ffprobe', ffmpegPath: 'configured-ffmpeg' }
+  }));
+  process.env.CHIKO_CONFIG = configPath;
+  const configured = loadConfig();
+  assert.equal(configured.media.ffprobePath, 'configured-ffprobe');
+  assert.equal(configured.media.ffmpegPath, 'configured-ffmpeg');
 });
 
 test('multiple attachments remain opt-in with a hard safety cap', () => {
@@ -165,6 +180,12 @@ test('trusted proxies and production security requirements fail closed', () => {
     }
   };
   assert.equal(loadConfig(production).deployment.isProduction, true);
+  const standalone = loadConfig({
+    ...production,
+    deployment: { ...production.deployment, multiInstance: false },
+    mongo: { requireTransactions: false }
+  });
+  assert.equal(standalone.mongo.requireTransactions, false);
   assert.throws(
     () => loadConfig({ ...production, rateLimit: { backend: 'memory' } }),
     /shared MongoDB storage|RATE_LIMIT_STORE/

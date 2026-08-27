@@ -4,3 +4,4 @@ posts.json.backup
 src/
 node_modules/
 /data/
+.tmp-*

@@ -284,6 +284,18 @@ function envRateOperation(name, value) {
   };
 }
 
+// Optional bundled media binaries (ffmpeg-static / ffprobe-static) keep video
+// uploads working on hosts such as Railway where system FFmpeg is not installed.
+function bundledMediaBinary(packageName, pick) {
+  try {
+    const exported = require(packageName);
+    const resolved = pick ? exported && exported.path : exported;
+    return typeof resolved === 'string' && resolved ? resolved : '';
+  } catch {
+    return '';
+  }
+}
+
 function readConfigFile(configPath) {
   if (!fs.existsSync(configPath)) return {};
 
@@ -395,8 +407,14 @@ function loadConfig(overrides = {}) {
       ]))
     },
     media: {
-      ffprobePath: process.env.FFPROBE_PATH || config.media.ffprobePath,
-      ffmpegPath: process.env.FFMPEG_PATH || config.media.ffmpegPath,
+      ffprobePath: process.env.FFPROBE_PATH
+        || (Object.hasOwn(fromFile.media || {}, 'ffprobePath')
+          ? config.media.ffprobePath
+          : bundledMediaBinary('ffprobe-static', true) || config.media.ffprobePath),
+      ffmpegPath: process.env.FFMPEG_PATH
+        || (Object.hasOwn(fromFile.media || {}, 'ffmpegPath')
+          ? config.media.ffmpegPath
+          : bundledMediaBinary('ffmpeg-static', false) || config.media.ffmpegPath),
       stripMetadata: envBoolean('STRIP_MEDIA_METADATA', config.media.stripMetadata),
       stripMetadataRequired: envBoolean('REQUIRE_METADATA_STRIPPING', config.media.stripMetadataRequired)
     },
@@ -810,8 +828,8 @@ function loadConfig(overrides = {}) {
     if (config.storage !== 'mongodb') {
       throw new Error('Production requires shared MongoDB storage; JSON storage is development-only.');
     }
-    if (!config.mongo.requireTransactions) {
-      throw new Error('Production requires MONGO_REQUIRE_TRANSACTIONS=true and a replica set or sharded MongoDB deployment.');
+    if (config.deployment.multiInstance && !config.mongo.requireTransactions) {
+      throw new Error('MULTI_INSTANCE=true requires MONGO_REQUIRE_TRANSACTIONS=true and a replica set or sharded MongoDB deployment.');
     }
     if (config.rateLimit.backend === 'memory') {
       throw new Error('Production requires RATE_LIMIT_STORE=mongodb or redis; memory limits are process-local.');

@@ -8,6 +8,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { createApp } = require('../app');
+const { loadConfig } = require('../config');
 
 const ONE_PIXEL_PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
@@ -63,13 +64,14 @@ function commandAvailable(command) {
   const result = childProcess.spawnSync(command, ['-version'], {
     shell: false,
     stdio: 'ignore',
-    timeout: 2000
+    timeout: 5000
   });
   return !result.error && result.status === 0;
 }
 
-const FFMPEG_AVAILABLE = commandAvailable('ffmpeg');
-const VIDEO_TOOLS_AVAILABLE = FFMPEG_AVAILABLE && commandAvailable('ffprobe');
+const MEDIA_COMMANDS = loadConfig({ deployment: { environment: 'test' } }).media;
+const FFMPEG_AVAILABLE = commandAvailable(MEDIA_COMMANDS.ffmpegPath);
+const VIDEO_TOOLS_AVAILABLE = FFMPEG_AVAILABLE && commandAvailable(MEDIA_COMMANDS.ffprobePath);
 
 async function createReply(url, threadId, comment, password = 'reply-password') {
   const form = new FormData();
@@ -208,7 +210,7 @@ test('escapes post HTML and renders dead citations without unsafe links', async 
   assert.match(html, /class="deadlink" data-post-id="99999"/);
 });
 
-test('post bodies contain large media and safely wrap long uninterrupted comments', async t => {
+test('single thumbnails float beside comments while long content wraps safely', async t => {
   const server = await testServer(t);
   const longWord = 'chiko'.repeat(500);
   const hostile = '<img src=x onerror=alert(1)>';
@@ -237,13 +239,15 @@ test('post bodies contain large media and safely wrap long uninterrupted comment
   }
   const bodyRule = /\.post-body\s*\{([^}]+)\}/.exec(style)?.[1] || '';
   const commentRule = /^\.comment\s*\{([^}]+)\}/m.exec(style)?.[1] || '';
-  const attachmentsRule = /\.post-attachments\s*\{([^}]+)\}/.exec(style)?.[1] || '';
-  assert.match(bodyRule, /display:\s*flex/);
-  assert.match(bodyRule, /flex-wrap:\s*wrap/);
+  const singleAttachmentRule = /\.post-attachments\[data-attachment-count="1"\],\s*\.post-attachments\[data-attachment-count="1"\] \.post-attachment\s*\{([^}]+)\}/.exec(style)?.[1] || '';
+  const singleImageRule = /\.post-attachments\[data-attachment-count="1"\] \.image-box\s*\{([^}]+)\}/.exec(style)?.[1] || '';
   assert.match(bodyRule, /min-width:\s*0/);
+  assert.doesNotMatch(bodyRule, /display:\s*flex/);
+  assert.match(singleAttachmentRule, /display:\s*contents/);
+  assert.match(singleImageRule, /float:\s*left/);
   assert.match(commentRule, /overflow-wrap:\s*anywhere/);
   assert.match(commentRule, /word-break:\s*break-word/);
-  assert.doesNotMatch(attachmentsRule, /float:/);
+  assert.doesNotMatch(commentRule, /flex:/);
 });
 
 test('file-only deletion retains the post and removes its upload', async t => {
@@ -1013,7 +1017,7 @@ test('generates and uses a real image thumbnail when FFmpeg is available', {
   const fixtureDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'chikochan-image-fixture-'));
   t.after(() => fs.rmSync(fixtureDirectory, { recursive: true, force: true }));
   const fixturePath = path.join(fixtureDirectory, 'large.png');
-  const generated = childProcess.spawnSync('ffmpeg', [
+  const generated = childProcess.spawnSync(MEDIA_COMMANDS.ffmpegPath, [
     '-hide_banner', '-loglevel', 'error', '-nostdin', '-y',
     '-f', 'lavfi', '-i', 'color=c=pink:s=640x480', '-frames:v', '1',
     fixturePath
@@ -1059,7 +1063,7 @@ test('posts, serves, renders, and deletes validated WebM and MP4 video assets', 
   const fixtureDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'chikochan-video-fixture-'));
   t.after(() => fs.rmSync(fixtureDirectory, { recursive: true, force: true }));
   const fixturePath = path.join(fixtureDirectory, 'fixture.webm');
-  const generated = childProcess.spawnSync('ffmpeg', [
+  const generated = childProcess.spawnSync(MEDIA_COMMANDS.ffmpegPath, [
     '-hide_banner', '-loglevel', 'error', '-nostdin', '-y',
     '-f', 'lavfi', '-i', 'color=c=blue:s=64x48:r=10:d=0.5',
     '-c:v', 'libvpx-vp9', '-pix_fmt', 'yuv420p', '-an',
@@ -1072,7 +1076,7 @@ test('posts, serves, renders, and deletes validated WebM and MP4 video assets', 
   const mp4FixturePath = path.join(fixtureDirectory, 'fixture.mp4');
   let mp4Generated = null;
   for (const codec of ['libx264', 'libopenh264']) {
-    mp4Generated = childProcess.spawnSync('ffmpeg', [
+    mp4Generated = childProcess.spawnSync(MEDIA_COMMANDS.ffmpegPath, [
       '-hide_banner', '-loglevel', 'error', '-nostdin', '-y',
       '-f', 'lavfi', '-i', 'color=c=green:s=64x48:r=10:d=0.5',
       '-c:v', codec, '-pix_fmt', 'yuv420p', '-an',

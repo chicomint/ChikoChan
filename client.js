@@ -363,6 +363,8 @@
         return;
       }
     }
+    // Native image verification submits the original multipart form directly.
+    if (event.target.querySelector('input[name="nativeAnswer"]')?.value.trim()) return;
     if (event.target.matches('form[data-posting-authorization]')
       && event.target.dataset.postingAuthorized !== '1') {
       event.preventDefault();

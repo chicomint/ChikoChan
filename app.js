@@ -2,6 +2,8 @@
 
 const express = require('express');
 const crypto = require('node:crypto');
+const { AsyncLocalStorage } = require('node:async_hooks');
+const { NativeCaptcha } = require('./lib/native-captcha');
 const fs = require('node:fs');
 const path = require('node:path');
 const { loadConfig } = require('./config');
@@ -31,7 +33,7 @@ function isJsonRequest(request) {
 
 function safeRedirect(value, fallback) {
   const candidate = String(value || '');
-  return candidate.startsWith('/') && !candidate.startsWith('//') ? candidate : fallback;
+  return candidate.startsWith('/') && !candidate.startsWith('//') && !/[\\\u0000-\u0020\u007f]/.test(candidate) ? candidate : fallback;
 }
 
 function optionalBoolean(value) {
@@ -88,7 +90,24 @@ function createApp(overrides = {}) {
   const rateLimiter = new RateLimiter(config, rateLimitStore);
   const authorizationNonceStore = createAuthorizationNonceStore(config, store, overrides);
   const postingAuthorization = new PostingAuthorization(config, authorizationNonceStore);
+  const nativeCaptcha = new NativeCaptcha(config, authorizationNonceStore);
+  const renderContext = new AsyncLocalStorage();
+  renderer.nativeVerification = (board, thread = 0) => {
+    if (!nativeCaptcha.enabled) return null;
+    const context = renderContext.getStore();
+    if (!context) return null;
+    context.session ||= nativeCaptcha.session(context.request, context.response);
+    const scope = `${board.uri}:${thread}`;
+    if (!context.challenges.has(scope)) {
+      context.challenges.set(scope, nativeCaptcha.issue({
+        board: board.uri, thread, session: context.session,
+        addressKey: abuseIdentity(context.request, 'native-captcha')
+      }));
+    }
+    return context.challenges.get(scope);
+  };
   const app = express();
+  app.use((request, response, next) => renderContext.run({ request, response, challenges: new Map() }, next));
   const publicMediaOrigin = config.mediaStorage.backend === 'object'
     ? new URL(config.mediaStorage.object.publicBaseUrl).origin
     : '';
@@ -397,7 +416,7 @@ function createApp(overrides = {}) {
       if (!postingAuthorization.enabled) throw httpError(404, 'Not found.');
       const board = await service.publicBoard(request.query.board);
       if (!board || !board.enabled) throw httpError(404, 'Board not found.');
-      const threadId = Number(request.query.threadId) || 0;
+      const threadId = optionalPositiveInteger(request.query.threadId === '0' ? undefined : request.query.threadId) || 0;
       if (!Number.isSafeInteger(threadId) || threadId < 0) throw httpError(400, 'Invalid thread.');
       if (threadId) {
         const thread = (await service.publicThread(threadId, board.id))?.thread;
@@ -423,7 +442,7 @@ function createApp(overrides = {}) {
         if (!postingAuthorization.enabled) throw httpError(404, 'Not found.');
         const board = await service.publicBoard(request.body.board);
         if (!board || !board.enabled) throw httpError(404, 'Board not found.');
-        const threadId = Number(request.body.threadId) || 0;
+        const threadId = optionalPositiveInteger(request.body.threadId === '0' ? undefined : request.body.threadId) || 0;
         if (!Number.isSafeInteger(threadId) || threadId < 0) throw httpError(400, 'Invalid thread.');
         if (threadId) {
           const thread = (await service.publicThread(threadId, board.id))?.thread;
@@ -431,7 +450,12 @@ function createApp(overrides = {}) {
             throw httpError(404, 'Thread not found.');
           }
         }
-        await antiAbuse.verify(request.body['cf-turnstile-response']);
+        if (request.query.nativeChallenge && request.body.nativeAnswer) {
+          const challenge = await nativeCaptcha.consume(request, {
+            board: board.uri, thread: threadId, addressKey: abuseIdentity(request, 'native-captcha')
+          });
+          nativeCaptcha.verify(challenge, request.body.nativeAnswer);
+        } else await antiAbuse.verify(request.body['cf-turnstile-response']);
         const authorization = await postingAuthorization.issue({
           boardUri: board.uri,
           threadId,
@@ -455,6 +479,21 @@ function createApp(overrides = {}) {
   );
 
   async function requirePostingAuthorization(request, response, next) {
+    if (nativeCaptcha.enabled && request.query.nativeChallenge
+      && !postingAuthorization.parse(postingAuthorization.readToken(request))) {
+      try {
+        await rateLimiter.consume('captchaAuthorization', abuseIdentity(request, 'rate:captchaAuthorization'),
+          'Too many verification attempts. Try again later.');
+        request.nativeChallenge = await nativeCaptcha.consume(request, {
+          board: String(request.params.boardUri || request.query.board || '').toLowerCase(),
+          thread: optionalPositiveInteger(request.query.threadId === '0' ? undefined : request.query.threadId) || 0,
+          addressKey: abuseIdentity(request, 'native-captcha')
+        });
+        request.verifyUploadAuthorization = () => nativeCaptcha.verify(request.nativeChallenge, request.body.nativeAnswer);
+        next();
+      } catch (error) { next(error); }
+      return;
+    }
     if (!postingAuthorization.enabled) {
       next();
       return;
@@ -484,8 +523,15 @@ function createApp(overrides = {}) {
       const media = [];
       let postCommitted = false;
       try {
+        for (const field of ['board', 'name', 'title', 'subject', 'sub', 'comment', 'com',
+          'password', 'pwd', 'threadId', 'resto', 'website', 'email', 'nativeAnswer']) {
+          if (request.body[field] !== undefined && typeof request.body[field] !== 'string') {
+            throw httpError(400, `Invalid ${field} field.`);
+          }
+        }
         const boardUri = request.board?.uri || request.body.board;
         let board = request.board || (boardUri ? await service.publicBoard(boardUri) : null);
+        if (!board && boardUri) throw httpError(404, 'Board not found.');
         if (!board) board = await service.publicDefaultBoard();
         if (!board || !board.enabled) throw httpError(404, 'Board not found.');
 
@@ -506,11 +552,18 @@ function createApp(overrides = {}) {
           requireCsrf(request);
           requirePermission(request, 'posts.capcode', board.id);
         }
-        if (!staffOnly && !postingAuthorization.enabled) {
+        if (!staffOnly && request.nativeChallenge) {
+          nativeCaptcha.verify(request.nativeChallenge, request.body.nativeAnswer);
+        } else if (!staffOnly && !postingAuthorization.enabled) {
           await antiAbuse.verify(request.body['cf-turnstile-response']);
         }
 
-        const threadId = Number.parseInt(request.body.threadId || request.body.resto, 10) || 0;
+        const rawThread = request.body.threadId ?? request.body.resto ?? '0';
+        if (typeof rawThread !== 'string' || !/^(0|[1-9][0-9]*)$/.test(rawThread)
+          || !Number.isSafeInteger(Number(rawThread))) throw httpError(400, 'Invalid thread.');
+        const threadId = Number(rawThread);
+        if (request.nativeChallenge && (request.nativeChallenge.board !== board.uri
+          || request.nativeChallenge.thread !== threadId)) throw httpError(403, 'Verification belongs to another board/thread.');
         if (!staffOnly && request.postAuthorization
           && (request.postAuthorization.board !== board.uri
             || Number(request.postAuthorization.thread) !== threadId)) {
@@ -611,6 +664,11 @@ function createApp(overrides = {}) {
     }
   });
 
+  app.get('/report/success', (request, response) => {
+    response.send(renderer.message('Report submitted', 'Thank you. A moderator can now review this post.',
+      service.getSiteStats(), safeRedirect(request.query.returnTo, '/')));
+  });
+
   app.post('/report', rateLimit('reportCreate', 'Too many reports from this address. Try again later.'), async (request, response, next) => {
     try {
       const report = await service.reportPost(request.body.postId, request.body.reason, {
@@ -628,7 +686,7 @@ function createApp(overrides = {}) {
       if (isJsonRequest(request)) response.status(201).json({ ok: true, reportId: report.id });
       else {
         const destination = safeRedirect(request.body.redirectTo, '/');
-        response.status(201).send(renderer.message('Report submitted', 'Thank you. A moderator can now review this post.', service.getSiteStats(), destination));
+        response.redirect(303, `/report/success?returnTo=${encodeURIComponent(destination)}`);
       }
     } catch (error) {
       next(error);
@@ -1534,13 +1592,20 @@ function createApp(overrides = {}) {
       status >= 500 ? 'Server error' : 'Request failed',
       message,
       { line: '' },
-      safeRedirect(request.get('referer'), '/'),
+      (() => {
+        try {
+          const referer = new URL(request.get('referer'));
+          const origin = config.deployment.publicOrigin || `${request.protocol}://${request.get('host')}`;
+          return referer.origin === new URL(origin).origin ? safeRedirect(referer.pathname + referer.search, '/') : '/';
+        } catch { return '/'; }
+      })(),
       error.appealUrl ? { actionHref: error.appealUrl, actionLabel: 'Appeal this restriction' } : {}
     ));
   });
 
   app.locals.chikochan = {
     config,
+    nativeCaptcha,
     store,
     uploads,
     service,

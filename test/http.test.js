@@ -1827,3 +1827,99 @@ test('report lifecycle preserves resolutions, audit history, and reporter privac
   assert.equal(autoClosed.resolution, 'post-deleted');
   assert.ok(autoClosed.history.some(entry => entry.action === 'target-deleted'));
 });
+
+test('native HTML multipart posting with Turnstile and authorization enabled uses PRG', async t => {
+  const server = await testServer(t, {
+    postingAuthorization: { enabled: true, secret: 'native-http-authorization-secret-123456789' },
+    antiAbuse: { turnstile: { enabled: true, siteKey: 'test', secretKey: 'test-secret' } },
+    turnstileFetch: async () => { throw new Error('Native forms must not contact Turnstile'); }
+  });
+  const captcha = server.app.locals.chikochan.nativeCaptcha;
+  let cookie = '';
+  async function formPage(pathname, id = 'post-form') {
+    const response = await fetch(server.url + pathname, { headers: { cookie } });
+    if (response.headers.get('set-cookie')) cookie = response.headers.get('set-cookie').split(';')[0];
+    assert.match(response.headers.get('cache-control'), /no-store/);
+    const html = await response.text();
+    const action = id === 'post-form'
+      ? /id="post-form"[^>]*action="([^"]+)"/.exec(html)[1]
+      : /class="reply-form" action="([^"]+)"/.exec(html)[1];
+    const url = new URL(action.replaceAll('&amp;', '&'), server.url);
+    return { url, answer: captcha.parse(url.searchParams.get('nativeChallenge')).answer };
+  }
+  async function submit(page, values = {}, file = ONE_PIXEL_PNG) {
+    const form = new FormData();
+    for (const [key, value] of Object.entries({ board: 'chiko', resto: '0', com: 'Native HTML comment', pwd: 'native-password', nativeAnswer: page.answer, ...values })) form.set(key, value);
+    if (file) form.set('upfile', new Blob([file], { type: 'image/png' }), 'native.png');
+    return fetch(page.url, { method: 'POST', body: form, headers: { cookie, accept: 'text/html' }, redirect: 'manual' });
+  }
+  const page = await formPage('/chiko/');
+  const created = await submit(page, { name: 'Native name', sub: 'Native subject' });
+  assert.equal(created.status, 303, await created.text());
+  const location = created.headers.get('location');
+  const threadId = /thread\/(\d+)/.exec(location)[1];
+  for (let refresh = 0; refresh < 2; refresh += 1) {
+    const html = await (await fetch(server.url + location)).text();
+    assert.match(html, /Native name/);
+    assert.match(html, /Native subject/);
+  }
+  assert.equal(server.app.locals.chikochan.service.getData().threads.length, 1);
+  assert.equal((await submit(page)).status, 403);
+  const replyPage = await formPage(location, 'reply');
+  assert.equal((await submit(replyPage, { resto: threadId, com: 'Native reply' }, null)).status, 303);
+  const invalid = await formPage(location, 'reply');
+  const badAnswer = await submit(invalid, { resto: threadId, nativeAnswer: 'wrong' });
+  assert.equal(badAnswer.status, 400);
+  assert.match(badAnswer.headers.get('content-type'), /text\/html/);
+  assert.match(await badAnswer.text(), /verification answer is incorrect/);
+  assert.equal((await submit(invalid, { resto: threadId })).status, 403);
+  const malformed = await formPage('/chiko/');
+  assert.equal((await submit(malformed, { resto: `${threadId}garbage` })).status, 400);
+  const mismatch = await formPage('/chiko/');
+  assert.equal((await submit(mismatch, { resto: threadId })).status, 403);
+  const badUpload = await formPage('/chiko/');
+  assert.equal((await submit(badUpload, {}, Buffer.from('not a png'))).status, 400);
+  assert.equal(fs.readdirSync(path.join(server.directory, 'quarantine')).length, 0);
+  assert.equal(fs.readdirSync(path.join(server.directory, 'src')).length, 1);
+});
+
+for (const protection of ['turnstile', 'authorization']) {
+  test(`native multipart forms work with only ${protection} enabled`, async t => {
+    const server = await testServer(t, {
+      postingAuthorization: { enabled: protection === 'authorization', secret: 'native-mode-secret-12345678901234567890' },
+      antiAbuse: { turnstile: { enabled: protection === 'turnstile', siteKey: 'test', secretKey: 'test-secret' } }
+    });
+    const response = await fetch(`${server.url}/chiko/`);
+    const cookie = response.headers.get('set-cookie').split(';')[0];
+    const html = await response.text();
+    const action = /id="post-form"[^>]*action="([^"]+)"/.exec(html)[1].replaceAll('&amp;', '&');
+    const target = new URL(action, server.url);
+    const answer = server.app.locals.chikochan.nativeCaptcha.parse(target.searchParams.get('nativeChallenge')).answer;
+    const form = new FormData();
+    form.set('nativeAnswer', answer);
+    form.set('com', 'Single protection mode');
+    form.set('upfile', new Blob([ONE_PIXEL_PNG], { type: 'image/png' }), 'mode.png');
+    const result = await fetch(target, { method: 'POST', headers: { cookie }, body: form, redirect: 'manual' });
+    assert.equal(result.status, 303, await result.text());
+  });
+}
+
+test('native upload authorization rejects file-before-answer multipart ordering', async t => {
+  const server = await testServer(t, {
+    postingAuthorization: { enabled: true, secret: 'native-order-secret-12345678901234567890' }
+  });
+  const response = await fetch(`${server.url}/chiko/`);
+  const cookie = response.headers.get('set-cookie').split(';')[0];
+  const html = await response.text();
+  const action = /id="post-form"[^>]*action="([^"]+)"/.exec(html)[1].replaceAll('&amp;', '&');
+  const target = new URL(action, server.url);
+  const answer = server.app.locals.chikochan.nativeCaptcha.parse(target.searchParams.get('nativeChallenge')).answer;
+  const form = new FormData();
+  form.set('upfile', new Blob([ONE_PIXEL_PNG], { type: 'image/png' }), 'reordered.png');
+  form.set('nativeAnswer', answer);
+  form.set('com', 'Reordered malicious form');
+  const result = await fetch(target, { method: 'POST', headers: { cookie }, body: form, redirect: 'manual' });
+  assert.equal(result.status, 400, await result.text());
+  assert.equal(fs.readdirSync(path.join(server.directory, 'quarantine')).length, 0);
+  assert.equal(fs.readdirSync(path.join(server.directory, 'src')).length, 0);
+});

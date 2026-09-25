@@ -11,25 +11,28 @@
     var isDark = theme === 'dark';
     if (isDark) root.setAttribute('data-theme', 'dark');
     else root.removeAttribute('data-theme');
-    document.querySelectorAll('.theme-toggle').forEach(function (button) {
-      button.textContent = isDark ? 'Light' : 'Dark';
+    document.querySelectorAll('.theme-selector').forEach(function (select) {
+      select.value = isDark ? 'dark' : 'light';
     });
   }
 
-  function toggleTheme() {
-    var current = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
-    var next = current === 'dark' ? 'light' : 'dark';
-    try {
-      window.localStorage.setItem(THEME_KEY, next);
-    } catch (error) {
-      // ignore
-    }
-    applyTheme(next);
-  }
+  document.addEventListener('change', function (event) {
+    if (!event.target.matches('.theme-selector')) return;
+    var theme = event.target.value === 'dark' ? 'dark' : 'light';
+    try { window.localStorage.setItem(THEME_KEY, theme); } catch (error) { /* Storage is optional. */ }
+    applyTheme(theme);
+  });
+
+  document.addEventListener('error', function (event) {
+    if (event.target.matches && event.target.matches('.global-banner img')) event.target.closest('.global-banner').hidden = true;
+  }, true);
 
   function initializeTheme() {
     var saved = storageGet(THEME_KEY, 'light');
     applyTheme(saved);
+    document.querySelectorAll('.global-banner img').forEach(function (img) {
+      if (img.complete && !img.naturalWidth) img.closest('.global-banner').hidden = true;
+    });
   }
 
   function storageGet(key, fallback) {
@@ -283,11 +286,6 @@
   }
 
   document.addEventListener('click', function (event) {
-    if (event.target.closest('.theme-toggle')) {
-      toggleTheme();
-      return;
-    }
-
     var quoteLink = event.target.closest('[data-quote-id][data-thread-id]');
     if (quoteLink && quotePost(quoteLink.dataset.quoteId, quoteLink.dataset.threadId) === false) {
       event.preventDefault();

@@ -317,7 +317,7 @@ function loadPages(rootDir) {
     const routeKey = key === 'rule' ? 'rules' : key;
     const title = routeKey.charAt(0).toUpperCase() + routeKey.slice(1);
     const content = fs.readFileSync(path.join(pagesDir, filename), 'utf8');
-    pages[routeKey] = { title, content };
+    pages[routeKey] = { title, content, sourcePath: path.join(pagesDir, filename) };
   }
   return pages;
 }

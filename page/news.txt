@@ -1,3 +1,8 @@
+# Layout update + JavaScript required — 9/25/26
+
+Now you can post even with JavaScript disabled.
+Also changes some UI and layout
+
 #We support video 8/24/26
 Yep.
 #Welcome 8/22/26

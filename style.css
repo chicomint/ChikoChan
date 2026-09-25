@@ -2552,3 +2552,84 @@ html[data-theme="dark"] .spoiler:focus {
     -webkit-text-fill-color: currentColor;
   }
 }
+
+/* Compact shared utility bar and optional global banner. */
+.utility-nav {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 3px 7px;
+  padding: 2px 0;
+  position: static;
+}
+.utility-links {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 3px 7px;
+  grid-column: 2;
+  grid-row: 1;
+}
+.utility-stats { grid-column: 1; grid-row: 1; }
+.utility-nav .theme-control { grid-column: 3; grid-row: 1; justify-self: end; }
+.utility-nav a { white-space: nowrap; }
+.theme-control { margin-left: auto; white-space: nowrap; }
+.theme-selector {
+  background: var(--form-bg);
+  border: 1px solid var(--form-border);
+  color: var(--text-color);
+  font: inherit;
+  padding: 0;
+}
+.global-banner { margin: 10px auto; text-align: center; }
+.global-banner[hidden] { display: none; }
+.global-banner img {
+  width: auto;
+  height: auto;
+  max-width: min(100%, 600px);
+  max-height: 200px;
+  object-fit: contain;
+}
+.site-page-content { overflow-wrap: anywhere; }
+.site-page-content p { margin: 0.8em 0; }
+.site-page-content h2, .site-page-content h3,
+.site-page-content h4, .site-page-content h5, .site-page-content h6 { margin: 1em 0 0.4em; }
+.site-page-content ul, .site-page-content ol { padding-left: 2em; }
+.site-page-content pre { overflow: auto; padding: 8px; background: var(--reply-bg); }
+.site-page-content code { font-family: monospace; }
+
+/* Center only the board introduction; threads keep the full available width. */
+.board-header { margin: 12px auto 8px; }
+.board-header h1 { line-height: 1.15; }
+.board-header p { margin: 4px auto 0; }
+body[data-board] .post-form-wrapper {
+  border-top: 0;
+  justify-content: center;
+  margin: 0 auto 10px;
+  padding-top: 0;
+  overflow: visible;
+}
+#post-form { width: max-content; max-width: 100%; }
+#post-form .post-form-table { width: 100%; max-width: 620px; }
+.board-index-threads { border-top: 1px solid var(--form-border); padding-top: 8px; }
+body[data-board] > .announcement {
+  border-left: 0;
+  border-right: 0;
+  max-width: none;
+  margin: 8px 0;
+}
+.board-bottom-nav { clear: both; font-size: 11px; margin: 6px 0; }
+@media (max-width: 900px) {
+  .utility-nav { grid-template-columns: minmax(0, 1fr) auto; }
+  .utility-links { grid-column: 1 / -1; }
+  .utility-stats { grid-column: 1; grid-row: 2; }
+  .utility-nav .theme-control { grid-column: 2; grid-row: 2; }
+}
+@media (max-width: 640px) {
+  #post-form { width: 100%; }
+  #post-form .post-form-table { table-layout: fixed; }
+  #post-form .label { width: 62px; }
+  #post-form input:not([type="submit"]):not([type="checkbox"]),
+  #post-form textarea { max-width: 100%; box-sizing: border-box; }
+  #post-form textarea { width: 100%; }
+  #post-form .field-hint { overflow-wrap: anywhere; }
+}

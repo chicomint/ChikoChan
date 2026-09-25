@@ -49,6 +49,17 @@ async function main() {
       page.on('pageerror', error => errors.push(error.message));
       await page.goto(base);
       assert.equal(await page.locator('body').isVisible(), true);
+      assert.equal(await page.locator('.utility-nav').count(), 1);
+      const globalNav = await page.locator('.utility-nav').innerHTML();
+      assert.equal(await page.locator('.board-directory').count(), 1);
+      if (javaScriptEnabled) {
+        await page.locator('.theme-selector').selectOption('dark');
+        assert.equal(await page.locator('html').getAttribute('data-theme'), 'dark');
+        await page.reload();
+        assert.equal(await page.locator('.theme-selector').inputValue(), 'dark');
+        await page.locator('.theme-selector').selectOption('light');
+        assert.equal(await page.locator('html').getAttribute('data-theme'), null);
+      }
       await page.locator('a[href="/chiko/"]').first().click();
       await page.locator('#name').fill('#fortune');
       await page.locator('#title').fill(`JavaScript ${javaScriptEnabled ? 'ON' : 'OFF'}`);
@@ -133,6 +144,62 @@ async function main() {
       await page.locator('[name="password"]').fill('browser-admin-password');
       await Promise.all([page.waitForNavigation(), page.locator('button[type="submit"]').click()]);
       assert.match(page.url(), /\/admin$/);
+      await page.goto(base + '/admin/customization');
+      await page.locator('[name="bannerEnabled"]').check();
+      await page.locator('[name="bannerImageUrl"]').fill('https://banner.example/header.png');
+      await page.locator('[name="bannerAlt"]').fill('Test banner');
+      await Promise.all([page.waitForNavigation(), page.locator('form[action="/admin/customization"] button[type="submit"]').click()]);
+      await context.route('https://banner.example/header.png', route => route.fulfill({ contentType: 'image/png', body: PNG }));
+      for (const width of [1280, 390]) {
+        await page.setViewportSize({ width, height: 900 });
+        for (const route of ['/', '/about', '/contact', '/news', '/rules', '/chiko/', '/chiko/catalog', '/chiko/archive', '/chiko/rules', new URL(threadUrl).pathname]) {
+          await page.goto(base + route);
+          assert.equal(await page.locator('.global-banner img').isVisible(), true);
+          assert.equal(await page.locator('.utility-nav').count(), 1);
+          assert.equal(await page.locator('.utility-nav').innerHTML(), globalNav);
+          if (route.startsWith('/chiko/')) {
+            for (const action of ['catalog', 'archive', 'rules']) {
+              assert.equal(await page.locator(`.utility-nav a[href="/chiko/${action}"]`).count(), 0);
+              assert.equal(await page.locator(`.board-bottom-nav a[href="/chiko/${action}"]`).count(), 1);
+            }
+            assert.equal(await page.locator('.board-bottom-nav a[href="/"]').count(), 1);
+          }
+          if (route === '/') assert.equal(await page.locator('.board-directory').count(), 1);
+          const linksBox = await page.locator('.utility-links').boundingBox();
+          assert.ok(Math.abs(linksBox.x + linksBox.width / 2 - width / 2) < 2, 'Top links are centered');
+          if (route === '/chiko/') {
+            const formBox = await page.locator('#post-form').boundingBox();
+            assert.ok(Math.abs(formBox.x + formBox.width / 2 - width / 2) < 2, 'Posting form is centered');
+            assert.ok(formBox.x >= 0 && formBox.x + formBox.width <= width, 'Form fits viewport');
+            const threadsBox = await page.locator('.threads-container').boundingBox();
+            assert.equal(await page.locator('.board-directory').count(), 0);
+            const menuBox = await page.locator('.board-bottom-nav').boundingBox();
+            assert.ok(menuBox.y >= formBox.y + formBox.height, 'Board menu follows posting form');
+            assert.ok(threadsBox.y >= menuBox.y + menuBox.height, 'Threads follow board menu');
+            assert.equal(await page.locator('.utility-nav a[href="/#boards"]').count(), 0);
+            assert.ok(threadsBox.x < 10 && threadsBox.width > width - 20, 'Threads remain wide and left aligned');
+            assert.equal(await page.locator('.utility-nav a[href="/chiko/catalog"]').count(), 0);
+            assert.equal(await page.locator('.board-bottom-nav a[href="/chiko/catalog"]').count(), 1);
+            await page.screenshot({ path: path.join(directory, `board-${width}-js-${javaScriptEnabled}.png`), fullPage: true });
+          }
+          assert.ok(await page.locator('.utility-nav').evaluate(element => element.getBoundingClientRect().right <= window.innerWidth));
+          assert.equal(await page.locator('.global-banner img').evaluate(img => img.complete && img.naturalWidth > 0), true);
+        }
+        await page.goto(base + '/about');
+        await page.screenshot({ path: path.join(directory, `about-${width}-js-${javaScriptEnabled}.png`), fullPage: true });
+      }
+      if (javaScriptEnabled) {
+        await context.unroute('https://banner.example/header.png');
+        await context.route('https://banner.example/header.png', route => route.abort());
+        await page.reload();
+        await page.waitForFunction(() => document.querySelector('.global-banner').hidden);
+      }
+      await page.goto(base + '/admin/customization');
+      await page.locator('[name="bannerEnabled"]').uncheck();
+      await Promise.all([page.waitForNavigation(), page.locator('form[action="/admin/customization"] button[type="submit"]').click()]);
+      await page.goto(base + '/chiko/');
+      assert.equal(await page.locator('.global-banner').count(), 0);
+      await page.goto(base + '/admin');
       await Promise.all([page.waitForNavigation(), page.locator('form[action="/admin/logout"] button').click()]);
       assert.match(page.url(), /\/admin\/login$/);
       if (!javaScriptEnabled) assert.deepEqual(scripts, []);

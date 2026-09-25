@@ -134,12 +134,14 @@ function createApp(overrides = {}) {
       if (config.security.hsts.preload) hsts.push('preload');
       response.setHeader('Strict-Transport-Security', hsts.join('; '));
     }
+    const banner = renderer.customization().globalBanner;
+    const bannerOrigin = banner?.enabled && banner.imageUrl ? new URL(banner.imageUrl).origin : '';
     response.setHeader('Content-Security-Policy', [
       "default-src 'self'",
       "base-uri 'none'",
       "form-action 'self'",
       "frame-ancestors 'none'",
-      `img-src 'self' data:${publicMediaOrigin ? ` ${publicMediaOrigin}` : ''}`,
+      `img-src 'self' data:${publicMediaOrigin ? ` ${publicMediaOrigin}` : ''}${bannerOrigin ? ` ${bannerOrigin}` : ''}`,
       `media-src 'self'${publicMediaOrigin ? ` ${publicMediaOrigin}` : ''}`,
       "object-src 'none'",
       antiAbuse.enabled ? `script-src 'self' ${TURNSTILE_ORIGIN}` : "script-src 'self'",
@@ -321,7 +323,8 @@ function createApp(overrides = {}) {
 
   for (const [key, page] of Object.entries(config.site?.pages || {})) {
     app.get(`/${key}`, (request, response) => {
-      response.send(renderer.page(key, page));
+      const content = page.sourcePath ? fs.readFileSync(page.sourcePath, 'utf8') : page.content;
+      response.send(renderer.page(key, { ...page, content }));
     });
   }
 

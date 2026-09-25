@@ -103,7 +103,7 @@ test('boards are isolated and appear on the homepage', async t => {
   const home = await fetch(server.url);
   const homeHtml = await home.text();
   assert.equal(home.status, 200);
-  assert.match(homeHtml, /Interests/);
+  assert.match(homeHtml, /class="board-directory"/);
   assert.match(homeHtml, /\/g\//);
   assert.match(homeHtml, /\/a\//);
   assert.match(homeHtml, /Total posts: 3/);
@@ -170,7 +170,7 @@ test('admin can move boards up and down and the homepage keeps that order', asyn
   assert.equal((await move('v', 'up')).status, 303);
   assert.deepEqual(server.app.locals.chikochan.service.getData().boards.map(board => board.uri), ['v', 'chiko', 'g']);
   homeHtml = await fetch(server.url).then(response => response.text());
-  assert.ok(homeHtml.indexOf('Interests') < homeHtml.indexOf('General'));
+  assert.ok(homeHtml.indexOf('/v/') < homeHtml.indexOf('/chiko/'));
 
   assert.equal((await move('v', 'sideways')).status, 400);
 });
@@ -574,4 +574,134 @@ test('board tags, sfw flag, and content filters are typed, escaped, and enforced
 
   const actions = service.getData().moderationLog.map(entry => entry.action);
   assert.deepEqual(actions.slice(-3), ['board-filter-add', 'board-filter-add', 'board-filter-delete']);
+});
+
+test('global banner saves safely through authenticated customization and persists in JSON', async t => {
+  const server = await testServer(t);
+  const cookie = await adminCookie(server.url);
+  const page = await (await fetch(`${server.url}/admin/customization`, { headers: { cookie } })).text();
+  assert.match(page, /<legend>Global Banner<\/legend>/);
+  const csrf = /name="csrf" value="([^"]+)"/.exec(page)[1];
+  const save = values => fetch(`${server.url}/admin/customization`, {
+    method: 'POST', redirect: 'manual', headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ csrf, bannerForm: '1', ...values })
+  });
+  assert.doesNotMatch(await (await fetch(`${server.url}/chiko/`)).text(), /class="global-banner"/);
+  for (const values of [{ bannerImageUrl: 'javascript:alert(1)' }, { bannerLinkUrl: '//evil.example' }, { bannerEnabled: '1' }]) {
+    assert.equal((await save(values)).status, 400);
+  }
+  const values = { bannerEnabled: '1', bannerImageUrl: 'https://example.com/banner.png', bannerLinkUrl: 'https://example.com/', bannerAlt: '"><script>bad</script>' };
+  assert.equal((await save(values)).status, 303);
+  const { JsonStore } = require('../lib/store');
+  const reloaded = new JsonStore(server.app.locals.chikochan.config);
+  assert.equal(reloaded.read().customization.globalBanner.enabled, true);
+  const thread = await createThread(server.url, 'chiko', 'Banner thread');
+  for (const route of ['/', '/about', '/chiko/', '/chiko/catalog', '/chiko/archive', '/chiko/rules', `/chiko/thread/${thread.id}`]) {
+    const response = await fetch(`${server.url}${route}`);
+    assert.equal(response.status, 200, route);
+    const html = await response.text();
+    assert.match(html, /class="global-banner"><a href="https:\/\/example.com\/"/);
+    assert.match(html, /alt="&quot;&gt;&lt;script&gt;bad&lt;\/script&gt;"/);
+    assert.match(response.headers.get('content-security-policy'), /img-src[^;]*https:\/\/example.com/);
+  }
+  assert.equal((await save({ ...values, bannerLinkUrl: '' })).status, 303);
+  assert.match(await (await fetch(`${server.url}/chiko/`)).text(), /class="global-banner"><img/);
+  assert.equal((await save({ ...values, bannerEnabled: '' })).status, 303);
+  assert.doesNotMatch(await (await fetch(`${server.url}/chiko/`)).text(), /class="global-banner"/);
+});
+
+test('shared global navigation lists enabled boards and board actions stay below content', async t => {
+  const server = await testServer(t);
+  const cookie = await adminCookie(server.url);
+  const navOf = html => /<nav class="board-list utility-nav"[^>]*>([\s\S]*?)<\/nav>/.exec(html)[1];
+  const before = navOf(await (await fetch(server.url)).text());
+  assert.ok(!before.includes('href="/g/"'));
+  await addBoard(server.url, cookie, { uri: 'g', name: 'Technology', category: 'General' });
+  const home = await (await fetch(server.url)).text();
+  const globalNav = navOf(home);
+  assert.match(globalNav, /href="\/g\/">\[\/g\/\]/);
+  assert.doesNotMatch(globalNav, /\[Boards\]|#post-form|\/catalog|\/archive|\/rules/);
+  assert.match(home, /class="board-directory"/);
+  assert.match(home, /class="board-categories"/);
+  assert.match(globalNav, /class="theme-selector"/);
+  const directoryOf = html => /<section class="board-directory">([\s\S]*?)<\/section>/.exec(html)[1];
+  assert.match(directoryOf(home), /<h3>General<\/h3>/);
+  assert.match(directoryOf(home), /href="\/g\/"[^>]*>Technology<\/a>/);
+  for (const page of ['about', 'contact', 'news', 'rules']) {
+    assert.ok(!globalNav.includes(`href="/${page}"`));
+    assert.ok(home.includes(`href="/${page}"`));
+  }
+  for (const route of ['/', '/overboard', '/search', '/about', '/contact', '/news', '/rules', '/admin/login', '/admin']) {
+    const html = await (await fetch(server.url + route, { headers: { cookie } })).text();
+    assert.equal(navOf(html), globalNav, route);
+  }
+  for (const board of ['chiko', 'g']) {
+    const thread = await createThread(server.url, board, 'Navigation test');
+    for (const route of ['', 'catalog', 'archive', 'rules', `thread/${thread.id}`]) {
+      const html = await (await fetch(`${server.url}/${board}/${route}`)).text();
+      assert.equal(navOf(html), globalNav, route);
+      assert.doesNotMatch(html, /class="board-directory"/);
+      const bottom = /<nav class="board-bottom-nav"[^>]*>([\s\S]*?)<\/nav>/.exec(html)[1];
+      for (const action of ['catalog', 'archive', 'rules']) assert.ok(bottom.includes(`href="/${board}/${action}"`));
+      assert.ok(bottom.includes('href="/"'));
+      if (!route) {
+        assert.ok(html.indexOf('class="board-bottom-nav"') > html.indexOf('id="post-form"'));
+        assert.ok(html.indexOf('class="board-bottom-nav"') < html.indexOf('<main'));
+      } else assert.ok(html.indexOf('class="board-bottom-nav"') > html.indexOf('</main>'));
+      assert.equal((html.match(/class="board-bottom-nav"/g) || []).length, 1);
+    }
+  }
+  const admin = await (await fetch(`${server.url}/admin/boards`, { headers: { cookie } })).text();
+  const csrf = /name="csrf" value="([^"]+)"/.exec(admin)[1];
+  const remove = await fetch(`${server.url}/admin/boards/delete`, {
+    method: 'POST', redirect: 'manual', headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ csrf, uri: 'g' })
+  });
+  assert.equal(remove.status, 303, await remove.text());
+  assert.equal(navOf(await (await fetch(server.url)).text()), before);
+  assert.ok(!(await (await fetch(server.url)).text()).includes('href="/g/"'), 'Removed board leaves the directory');
+  await addBoard(server.url, cookie, { uri: 'hidden', name: 'Disabled board', category: 'General' });
+  await server.app.locals.chikochan.store.update(data => {
+    data.boards.find(board => board.uri === 'hidden').enabled = false;
+  });
+  assert.equal(navOf(await (await fetch(server.url)).text()), before);
+});
+
+test('text routes reread editable source files and render safe HTML in the shared layout', async t => {
+  const server = await testServer(t);
+  const filename = path.join(server.directory, 'about.txt');
+  server.app.locals.chikochan.config.site.pages.about.sourcePath = filename;
+  fs.writeFileSync(filename, '# Fresh heading\n\n- First item\n\n<script>alert(1)</script>\n\n[unsafe](javascript:alert(1))');
+  let html = await (await fetch(`${server.url}/about`)).text();
+  assert.match(html, /<h2>Fresh heading<\/h2>/);
+  assert.match(html, /<li>First item<\/li>/);
+  assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+  assert.doesNotMatch(html, /href="javascript:|<script>alert/);
+  assert.match(html, /class="theme-selector"/);
+  fs.writeFileSync(filename, 'Updated without restarting.');
+  html = await (await fetch(`${server.url}/about`)).text();
+  assert.match(html, /<p>Updated without restarting\.<\/p>/);
+  for (const route of ['/contact', '/news', '/rules']) {
+    const response = await fetch(server.url + route);
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get('content-type'), /text\/html/);
+    assert.match(await response.text(), /class="site-page-content"/);
+  }
+});
+
+test('board index places one board menu after the posting form and before threads', async t => {
+  const server = await testServer(t, { site: { announcement: 'Layout notice' } });
+  const thread = await createThread(server.url, 'chiko', 'Layout test');
+  const html = await (await fetch(`${server.url}/chiko/`)).text();
+  const form = html.indexOf('id="post-form"');
+  const notice = html.indexOf('<aside class="announcement">');
+  const threads = html.indexOf('class="threads-container board-index-threads"');
+  const bottom = html.indexOf('class="board-bottom-nav"');
+  assert.doesNotMatch(html, /class="board-directory"/);
+  assert.ok(form > 0 && form < notice && notice < bottom && bottom < threads);
+  assert.ok(bottom < html.indexOf(`id="p${thread.id}"`));
+  assert.equal((html.match(/class="board-bottom-nav"/g) || []).length, 1);
+  assert.equal((html.match(/class="announcement"/g) || []).length, 1);
+  assert.equal((html.match(/href="\/chiko\/catalog"/g) || []).length, 1);
+  assert.equal((html.match(/href="\/"/g) || []).length, 2);
 });

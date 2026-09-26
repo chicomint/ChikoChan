@@ -696,7 +696,10 @@ test('shared global navigation lists enabled boards and board actions stay below
 test('text routes reread editable source files and render safe HTML in the shared layout', async t => {
   const server = await testServer(t);
   const filename = path.join(server.directory, 'about.txt');
-  server.app.locals.chikochan.config.site.pages.about.sourcePath = filename;
+  const aboutPage = server.app.locals.chikochan.config.site.pages.about;
+  const originalPath = aboutPage.sourcePath;
+  t.after(() => { aboutPage.sourcePath = originalPath; });
+  aboutPage.sourcePath = filename;
   fs.writeFileSync(filename, '# Fresh heading\n\n- First item\n\n<script>alert(1)</script>\n\n[unsafe](javascript:alert(1))');
   let html = await (await fetch(`${server.url}/about`)).text();
   assert.match(html, /<h2>Fresh heading<\/h2>/);
@@ -730,4 +733,94 @@ test('board index places one board menu after the posting form and before thread
   assert.equal((html.match(/class="announcement"/g) || []).length, 1);
   assert.equal((html.match(/href="\/chiko\/catalog"/g) || []).length, 1);
   assert.equal((html.match(/href="\/"/g) || []).length, 2);
+});
+
+test('per-board banners persist, stay isolated, and fall back safely to the global banner', async t => {
+  const server = await testServer(t);
+  const cookie = await adminCookie(server.url);
+  const { config, service } = server.app.locals.chikochan;
+  const folder = path.join(config.rootDir, 'Banner');
+  const names = ['global', 'g', 'v'].map(name => `board-test-${process.pid}-${name}.png`);
+  const linkName = `board-test-${process.pid}-link.png`;
+  t.after(() => {
+    for (const name of [...names, linkName]) fs.rmSync(path.join(folder, name), { force: true });
+  });
+  for (const name of names) fs.writeFileSync(path.join(folder, name), ONE_PIXEL_PNG);
+  fs.symlinkSync(path.join(folder, names[0]), path.join(folder, linkName));
+  await addBoard(server.url, cookie, { uri: 'g', name: 'Technology' });
+  await addBoard(server.url, cookie, { uri: 'v', name: 'Games' });
+  const page = await (await fetch(`${server.url}/admin/boards/g/settings`, { headers: { cookie } })).text();
+  const csrf = /name="csrf" value="([^"]+)"/.exec(page)[1];
+  const post = (route, fields) => fetch(`${server.url}${route}`, {
+    method: 'POST', redirect: 'manual', headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ csrf, ...fields })
+  });
+  const save = (uri, values = {}) => post('/admin/boards/edit', {
+    uri, settingsForm: '1', boardBannerForm: '1', ...values
+  });
+  const global = enabled => post('/admin/customization', {
+    bannerForm: '1', bannerEnabled: enabled ? '1' : '', bannerFilename: names[0]
+  });
+  const bannerAt = async route => {
+    const response = await fetch(`${server.url}${route}`);
+    assert.equal(response.status, 200, route);
+    const html = await response.text();
+    return html.match(/<div class="global-banner">[\s\S]*?<\/div>/)?.[0] || '';
+  };
+  for (const uri of ['g', 'v', 'chiko']) {
+    const html = await (await fetch(`${server.url}/admin/boards/${uri}/settings`, { headers: { cookie } })).text();
+    assert.match(html, /<legend>Board Banner<\/legend>/);
+    assert.match(html, /name="boardBannerFilename"/);
+    for (const name of names) assert.ok(html.includes(`<option value="${name}"`));
+    assert.ok(!html.includes(`<option value="${linkName}"`));
+    assert.equal(await bannerAt(`/${uri}/`), '');
+  }
+  assert.equal((await global(true)).status, 303);
+  assert.ok((await bannerAt('/g/')).includes(names[0]));
+  for (const [uri, filename] of [['g', names[1]], ['v', names[2]]]) {
+    assert.equal((await save(uri, {
+      boardBannerEnabled: '1', boardBannerFilename: filename,
+      boardBannerLinkUrl: 'https://example.com/', boardBannerAlt: '"><script>bad</script>',
+      bannerText: 'Preserved board text', boardTheme_replyBackground: '#abcdef'
+    })).status, 303);
+    const thread = await createThread(server.url, uri, `${uri} thread`);
+    for (const route of [`/${uri}/`, `/${uri}/thread/${thread.id}`, `/${uri}/catalog`, `/${uri}/archive`, `/${uri}/rules`]) {
+      const banner = await bannerAt(route);
+      assert.ok(banner.includes(`/banner/${filename}`), route);
+      assert.ok(!banner.includes(names[0]), route);
+      assert.match(banner, /href="https:\/\/example.com\/"/);
+      assert.match(banner, /alt="&quot;&gt;&lt;script&gt;bad&lt;\/script&gt;"/);
+    }
+  }
+  for (const route of ['/', '/about', '/chiko/']) assert.ok((await bannerAt(route)).includes(names[0]));
+  const { JsonStore } = require('../lib/store');
+  const data = new JsonStore(config).read();
+  const { documentsFromData, dataFromDocuments } = require('../lib/mongo-store');
+  const restored = dataFromDocuments(documentsFromData(data));
+  for (const [uri, filename] of [['g', names[1]], ['v', names[2]]]) {
+    const board = data.boards.find(item => item.uri === uri);
+    assert.equal(board.appearance.banner.filename, filename);
+    assert.equal(board.appearance.banner.enabled, true);
+    assert.equal(board.appearance.bannerText, 'Preserved board text');
+    assert.equal(board.appearance.theme.replyBackground, '#abcdef');
+    assert.deepEqual(restored.boards.find(item => item.uri === uri).appearance, board.appearance);
+  }
+  for (const filename of ['../outside.png', '/etc/passwd', 'https://example.com/a.png', 'missing.png', linkName]) {
+    assert.equal((await save('g', { boardBannerFilename: filename })).status, 400, filename);
+  }
+  assert.equal((await save('g', { boardBannerEnabled: '1' })).status, 400);
+  assert.equal((await save('g', { boardBannerFilename: names[1], boardBannerLinkUrl: 'javascript:alert(1)' })).status, 400);
+  assert.equal(service.getData().boards.find(board => board.uri === 'g').appearance.banner.filename, names[1]);
+  fs.unlinkSync(path.join(folder, names[1]));
+  assert.ok((await bannerAt('/g/')).includes(names[0]));
+  assert.ok((await bannerAt('/v/')).includes(names[2]));
+  const missingPage = await (await fetch(`${server.url}/admin/boards/g/settings`, { headers: { cookie } })).text();
+  assert.ok(!missingPage.includes(`<option value="${names[1]}"`));
+  assert.equal((await global(false)).status, 303);
+  assert.equal(await bannerAt('/g/'), '');
+  assert.ok((await bannerAt('/v/')).includes(names[2]));
+  assert.equal((await save('v', { boardBannerFilename: names[2] })).status, 303);
+  assert.equal(await bannerAt('/v/'), '');
+  assert.equal((await global(true)).status, 303);
+  assert.ok((await bannerAt('/v/')).includes(names[0]));
 });

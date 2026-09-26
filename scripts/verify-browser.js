@@ -201,6 +201,31 @@ async function main() {
         await page.goto(base + '/about');
         await page.screenshot({ path: path.join(directory, `about-${width}-js-${javaScriptEnabled}.png`), fullPage: true });
       }
+      await page.goto(base + '/admin/boards/chiko/settings');
+      await page.locator('[name="boardBannerEnabled"]').check();
+      await page.locator('[name="boardBannerFilename"]').selectOption(bannerFilename);
+      await page.locator('[name="boardBannerAlt"]').fill('Board-specific banner');
+      await Promise.all([page.waitForNavigation(), page.locator('form[action="/admin/boards/edit"] button[type="submit"]').click()]);
+      assert.equal(await page.locator('[name="boardBannerFilename"]').inputValue(), bannerFilename);
+      for (const width of [1280, 390]) {
+        await page.setViewportSize({ width, height: 900 });
+        await page.goto(base + '/admin/boards/chiko/settings');
+        await page.locator('fieldset').filter({ has: page.locator('[name="boardBannerFilename"]') }).screenshot({ path: path.join(directory, `board-banner-picker-${width}-js-${javaScriptEnabled}.png`) });
+        for (const route of ['/chiko/', new URL(threadUrl).pathname, '/chiko/catalog', '/chiko/archive', '/chiko/rules']) {
+          await page.goto(base + route);
+          assert.equal(await page.locator('.global-banner img').getAttribute('alt'), 'Board-specific banner');
+          const box = await page.locator('.global-banner img').boundingBox();
+          assert.ok(box.x >= 0 && box.x + box.width <= width);
+          assert.ok(Math.abs(box.width / box.height - 6) < 0.05);
+        }
+        await page.goto(base + '/');
+        assert.equal(await page.locator('.global-banner img').getAttribute('alt'), 'Test banner');
+      }
+      await page.goto(base + '/admin/boards/chiko/settings');
+      await page.locator('[name="boardBannerEnabled"]').uncheck();
+      await Promise.all([page.waitForNavigation(), page.locator('form[action="/admin/boards/edit"] button[type="submit"]').click()]);
+      await page.goto(base + '/chiko/');
+      assert.equal(await page.locator('.global-banner img').getAttribute('alt'), 'Test banner');
       if (javaScriptEnabled) {
         await context.route(`${base}/banner/${bannerFilename}`, route => route.abort());
         await page.reload();

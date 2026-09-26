@@ -1273,6 +1273,12 @@ function createApp(overrides = {}) {
           anonymousName: request.body.anonymousName
         };
         changes.appearance = {
+          ...(request.body.boardBannerForm === '1' ? { banner: {
+            enabled: request.body.boardBannerEnabled === '1',
+            filename: request.body.boardBannerFilename,
+            linkUrl: request.body.boardBannerLinkUrl,
+            alt: request.body.boardBannerAlt
+          } } : {}),
           bannerText: request.body.bannerText,
           bannerPath: request.body.bannerPath,
           theme: Object.fromEntries(Object.entries(request.body)

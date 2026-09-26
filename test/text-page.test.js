@@ -19,11 +19,11 @@ test('banner URL normalization rejects unsafe schemes, credentials and malformed
   for (const value of ['javascript:alert(1)', '//example.com/x', 'data:image/png,x', 'https://', 'https://a:b@example.com/x', 'https://example.com/" onerror="x', 'https://example.com/\\evil', 'https://example.com/\nx']) assert.equal(httpUrl(value), '', value);
   assert.equal(httpUrl('http://example.com/banner.png'), 'http://example.com/banner.png');
   assert.equal(normalizeCustomization({}).globalBanner.enabled, false);
-  assert.equal(normalizeCustomization({ globalBanner: { enabled: 'true', imageUrl: 'javascript:x' } }).globalBanner.imageUrl, '');
+  assert.equal(normalizeCustomization({ globalBanner: { enabled: 'true', imageUrl: 'javascript:x' } }).globalBanner.filename, '');
 });
 
 test('global banner survives the MongoDB document round trip', () => {
-  const data = normalizeData({ customization: { globalBanner: { enabled: true, imageUrl: 'https://example.com/banner.png', linkUrl: 'https://example.com/', alt: 'Banner' } } }, 45, createDefaultBoard({ board: { uri: 'chiko', title: 'ChikoChan' } }));
+  const data = normalizeData({ customization: { globalBanner: { enabled: true, filename: 'banner.png', linkUrl: 'https://example.com/', alt: 'Banner' } } }, 45, createDefaultBoard({ board: { uri: 'chiko', title: 'ChikoChan' } }));
   const restored = dataFromDocuments(documentsFromData(data));
   assert.deepEqual(restored.customization.globalBanner, data.customization.globalBanner);
 });

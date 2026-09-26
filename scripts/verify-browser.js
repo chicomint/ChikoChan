@@ -24,6 +24,12 @@ async function main() {
       success: options.body.get('response') === 'browser-test-token', action: 'post', hostname: 'localhost'
     }) })
   });
+  const bannerFilename = `browser-banner-${process.pid}.png`;
+  const bannerPath = path.join(app.locals.chikochan.config.rootDir, 'Banner', bannerFilename);
+  const bannerImage = execFileSync(app.locals.chikochan.config.media.ffmpegPath,
+    ['-v', 'error', '-f', 'lavfi', '-i', 'color=c=teal:s=1200x200', '-frames:v', '1',
+      '-threads', '1', '-f', 'image2pipe', '-vcodec', 'png', 'pipe:1']);
+  fs.writeFileSync(bannerPath, bannerImage);
   const server = await new Promise(resolve => {
     const listener = app.listen(0, '127.0.0.1', () => resolve(listener));
   });
@@ -146,15 +152,22 @@ async function main() {
       assert.match(page.url(), /\/admin$/);
       await page.goto(base + '/admin/customization');
       await page.locator('[name="bannerEnabled"]').check();
-      await page.locator('[name="bannerImageUrl"]').fill('https://banner.example/header.png');
+      await page.locator('[name="bannerFilename"]').selectOption(bannerFilename);
       await page.locator('[name="bannerAlt"]').fill('Test banner');
       await Promise.all([page.waitForNavigation(), page.locator('form[action="/admin/customization"] button[type="submit"]').click()]);
-      await context.route('https://banner.example/header.png', route => route.fulfill({ contentType: 'image/png', body: PNG }));
       for (const width of [1280, 390]) {
         await page.setViewportSize({ width, height: 900 });
+        await page.goto(base + '/admin/customization');
+        assert.equal(await page.locator('[name="bannerFilename"]').inputValue(), bannerFilename);
+        assert.equal(await page.locator('[name="bannerImageUrl"]').count(), 0);
+        await page.locator('fieldset').filter({ has: page.locator('[name="bannerFilename"]') }).screenshot({ path: path.join(directory, `banner-picker-${width}-js-${javaScriptEnabled}.png`) });
         for (const route of ['/', '/about', '/contact', '/news', '/rules', '/chiko/', '/chiko/catalog', '/chiko/archive', '/chiko/rules', new URL(threadUrl).pathname]) {
           await page.goto(base + route);
           assert.equal(await page.locator('.global-banner img').isVisible(), true);
+          const bannerBox = await page.locator('.global-banner img').boundingBox();
+          assert.ok(bannerBox.x >= 0 && bannerBox.x + bannerBox.width <= width, 'Banner fits viewport');
+          assert.ok(Math.abs(bannerBox.width / bannerBox.height - 6) < 0.05, 'Banner preserves aspect ratio');
+          assert.ok(Math.abs(bannerBox.x + bannerBox.width / 2 - width / 2) < 2, 'Banner stays centered');
           assert.equal(await page.locator('.utility-nav').count(), 1);
           assert.equal(await page.locator('.utility-nav').innerHTML(), globalNav);
           if (route.startsWith('/chiko/')) {
@@ -189,8 +202,7 @@ async function main() {
         await page.screenshot({ path: path.join(directory, `about-${width}-js-${javaScriptEnabled}.png`), fullPage: true });
       }
       if (javaScriptEnabled) {
-        await context.unroute('https://banner.example/header.png');
-        await context.route('https://banner.example/header.png', route => route.abort());
+        await context.route(`${base}/banner/${bannerFilename}`, route => route.abort());
         await page.reload();
         await page.waitForFunction(() => document.querySelector('.global-banner').hidden);
       }
@@ -209,6 +221,7 @@ async function main() {
     }
     console.log(`Screenshots: ${directory}`);
   } finally {
+    fs.rmSync(bannerPath, { force: true });
     await browser?.close();
     await new Promise(resolve => server.close(resolve));
     // Retain disposable screenshots and data for visual inspection.

@@ -578,6 +578,11 @@ test('board tags, sfw flag, and content filters are typed, escaped, and enforced
 
 test('global banner saves safely through authenticated customization and persists in JSON', async t => {
   const server = await testServer(t);
+  const folder = path.join(server.app.locals.chikochan.config.rootDir, 'Banner');
+  assert.ok(fs.statSync(folder).isDirectory());
+  const filename = `test-banner-${process.pid}.png`;
+  fs.writeFileSync(path.join(folder, filename), ONE_PIXEL_PNG);
+  t.after(() => fs.rmSync(path.join(folder, filename), { force: true }));
   const cookie = await adminCookie(server.url);
   const page = await (await fetch(`${server.url}/admin/customization`, { headers: { cookie } })).text();
   assert.match(page, /<legend>Global Banner<\/legend>/);
@@ -590,11 +595,23 @@ test('global banner saves safely through authenticated customization and persist
   for (const values of [{ bannerImageUrl: 'javascript:alert(1)' }, { bannerLinkUrl: '//evil.example' }, { bannerEnabled: '1' }]) {
     assert.equal((await save(values)).status, 400);
   }
-  const values = { bannerEnabled: '1', bannerImageUrl: 'https://example.com/banner.png', bannerLinkUrl: 'https://example.com/', bannerAlt: '"><script>bad</script>' };
+  const values = { bannerEnabled: '1', bannerFilename: filename, bannerLinkUrl: 'https://example.com/', bannerAlt: '"><script>bad</script>' };
   assert.equal((await save(values)).status, 303);
   const { JsonStore } = require('../lib/store');
   const reloaded = new JsonStore(server.app.locals.chikochan.config);
   assert.equal(reloaded.read().customization.globalBanner.enabled, true);
+  assert.equal(reloaded.read().customization.globalBanner.filename, filename);
+  assert.equal(Object.hasOwn(reloaded.read().customization.globalBanner, 'imageUrl'), false);
+  assert.ok(page.includes(`<option value="${filename}"`));
+  for (const bannerFilename of ['../secret.png', '../../secret.txt', '/etc/passwd', 'https://example.com/banner.png', 'missing.png', 'a\\b.png']) {
+    assert.equal((await save({ bannerFilename })).status, 400);
+  }
+  const imageResponse = await fetch(`${server.url}/banner/${filename}`);
+  assert.equal(imageResponse.status, 200);
+  assert.deepEqual(Buffer.from(await imageResponse.arrayBuffer()), ONE_PIXEL_PNG);
+  for (const name of ['README.txt', '%2e%2e%2fsecret.png', '%2fetc%2fpasswd']) {
+    assert.equal((await fetch(`${server.url}/banner/${name}`)).status, 404);
+  }
   const thread = await createThread(server.url, 'chiko', 'Banner thread');
   for (const route of ['/', '/about', '/chiko/', '/chiko/catalog', '/chiko/archive', '/chiko/rules', `/chiko/thread/${thread.id}`]) {
     const response = await fetch(`${server.url}${route}`);
@@ -602,10 +619,19 @@ test('global banner saves safely through authenticated customization and persist
     const html = await response.text();
     assert.match(html, /class="global-banner"><a href="https:\/\/example.com\/"/);
     assert.match(html, /alt="&quot;&gt;&lt;script&gt;bad&lt;\/script&gt;"/);
-    assert.match(response.headers.get('content-security-policy'), /img-src[^;]*https:\/\/example.com/);
+    assert.ok(html.includes(`src="/banner/${filename}"`));
+    assert.doesNotMatch(response.headers.get('content-security-policy'), /img-src[^;]*https:\/\/example.com/);
   }
   assert.equal((await save({ ...values, bannerLinkUrl: '' })).status, 303);
   assert.match(await (await fetch(`${server.url}/chiko/`)).text(), /class="global-banner"><img/);
+  fs.unlinkSync(path.join(folder, filename));
+  const missing = await fetch(`${server.url}/chiko/`);
+  assert.equal(missing.status, 200);
+  assert.doesNotMatch(await missing.text(), /class="global-banner"/);
+  const adminPage = await (await fetch(`${server.url}/admin/customization`, { headers: { cookie } })).text();
+  assert.ok(!adminPage.includes(`<option value="${filename}"`));
+  assert.equal((await fetch(`${server.url}/banner/${filename}`)).status, 404);
+  fs.writeFileSync(path.join(folder, filename), ONE_PIXEL_PNG);
   assert.equal((await save({ ...values, bannerEnabled: '' })).status, 303);
   assert.doesNotMatch(await (await fetch(`${server.url}/chiko/`)).text(), /class="global-banner"/);
 });

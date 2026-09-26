@@ -6,6 +6,7 @@ const { AsyncLocalStorage } = require('node:async_hooks');
 const { NativeCaptcha } = require('./lib/native-captcha');
 const fs = require('node:fs');
 const path = require('node:path');
+const { bannerDirectory, openBanner } = require('./lib/banners');
 const { loadConfig } = require('./config');
 const { AdminAuth } = require('./lib/admin-auth');
 const { TURNSTILE_ORIGIN, TurnstileAdapter } = require('./lib/anti-abuse');
@@ -53,6 +54,7 @@ function optionalPositiveInteger(value) {
 
 function createApp(overrides = {}) {
   const config = loadConfig(overrides);
+  fs.mkdirSync(bannerDirectory(config), { recursive: true });
   const store = overrides.store || (config.storage === 'json' ? new JsonStore(config) : new MongoStore(config));
   store.ready ||= Promise.resolve(store);
   const uploads = new UploadManager(config, {
@@ -134,14 +136,12 @@ function createApp(overrides = {}) {
       if (config.security.hsts.preload) hsts.push('preload');
       response.setHeader('Strict-Transport-Security', hsts.join('; '));
     }
-    const banner = renderer.customization().globalBanner;
-    const bannerOrigin = banner?.enabled && banner.imageUrl ? new URL(banner.imageUrl).origin : '';
     response.setHeader('Content-Security-Policy', [
       "default-src 'self'",
       "base-uri 'none'",
       "form-action 'self'",
       "frame-ancestors 'none'",
-      `img-src 'self' data:${publicMediaOrigin ? ` ${publicMediaOrigin}` : ''}${bannerOrigin ? ` ${bannerOrigin}` : ''}`,
+      `img-src 'self' data:${publicMediaOrigin ? ` ${publicMediaOrigin}` : ''}`,
       `media-src 'self'${publicMediaOrigin ? ` ${publicMediaOrigin}` : ''}`,
       "object-src 'none'",
       antiAbuse.enabled ? `script-src 'self' ${TURNSTILE_ORIGIN}` : "script-src 'self'",
@@ -230,6 +230,17 @@ function createApp(overrides = {}) {
     response.type('text/css');
     response.setHeader('Cache-Control', 'no-cache');
     response.send(renderer.customStyles());
+  });
+
+  app.get('/banner/:filename', (request, response) => {
+    const file = openBanner(config, request.params.filename);
+    if (!file) return response.sendStatus(404);
+    response.type(file.mime);
+    response.setHeader('Cache-Control', 'no-cache');
+    const stream = fs.createReadStream(null, { fd: file.fd, autoClose: true, start: 0 });
+    stream.on('error', () => response.destroy());
+    response.on('close', () => stream.destroy());
+    stream.pipe(response);
   });
 
   app.get('/banner.png', (request, response, next) => {

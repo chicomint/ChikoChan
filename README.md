@@ -93,13 +93,3 @@ Check the main JavaScript files for syntax errors:
 npm run check
 ```
 
-## Tech
-
-- Node.js
-- Express
-- MongoDB
-- HTML / CSS / JavaScript
-
-## License
-
-Licensed under the ISC License. See `LICENSE` for more information.

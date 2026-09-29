@@ -1,5 +1,5 @@
 # <img src="chikki.ico" width="40" alt=""> ChikoChan
-![ChikoChan board](Image/1.png)
+![ChikoChan board](Image/owwww.png)
 A lightweight and simple imageboard built with Node.js.
 ChikoChan supports multiple boards, file uploads, and can run locally without needing a database server.
 

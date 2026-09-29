@@ -1,43 +1,105 @@
 # <img src="chikki.ico" width="40" alt=""> ChikoChan
-
-ChikoChan is a lightweight, multi-board imageboard written in Node.js and backed by MongoDB.<br>
-Uploads are ordinary files in `data/src/`.
-
 ![ChikoChan board](Image/1.png)
+A lightweight and simple imageboard built with Node.js.
+ChikoChan supports multiple boards, file uploads, and can run locally without needing a database server.
 
-## Quick start
+## Getting Started
 
-Requirements:
+### Requirements
 
 - Node.js 22 or newer
-- npm, included with Node.js
-- MongoDB, with its connection string in `MONGO_URL` (or `MONGODB_URI`)
+- npm
+- Git
 
-Edit `.env`:
+### Installation
+
+Clone the repository:
+
+```bash
+git clone https://github.com/chicomint/ChikoChan.git
+cd ChikoChan
+```
+
+Install the dependencies:
+
+```bash
+npm install
+```
+
+Start ChikoChan:
+
+```bash
+npm run start:local
+```
+
+Then open:
+
+```text
+http://localhost:3000
+```
+
+That's it.
+
+Local posts and uploads will be stored inside the `data/` folder.
+
+## Using MongoDB
+
+MongoDB is optional. You only need it if you want to use MongoDB instead of the built-in local storage.
+
+Copy `env.example.txt` to a new file named `.env` and change:
 
 ```env
-STORAGE="mongodb"
+STORAGE=mongodb
 MONGO_URL="your-mongodb-connection-string"
 DATA_DIR="./data"
 ```
 
-Then run:
+Then start normally:
 
-```sh
-npm install
-node .
+```bash
+npm start
 ```
 
-Open <http://localhost:3000>.
+## Admin Panel
 
-## Run without MongoDB
+The admin panel is disabled by default.
 
-For a quick local test, no database setup is needed:
+To enable it, add these to your `.env` file:
 
-```sh
-npm install
-npm run start:local
+```env
+ADMIN_PASSWORD="your-password"
+ADMIN_SESSION_SECRET="your-secret"
 ```
 
-Local posts and uploads are kept in `data/`.
- `ADMIN_SESSION_SECRET` is required for legacy and named sessions; keep `ADMIN_PASSWORD` configured until at least one named root account has been tested.
+Make sure you use your own secure values.
+
+## Development
+
+Start the server with Node.js watch mode:
+
+```bash
+npm run dev
+```
+
+Run tests:
+
+```bash
+npm test
+```
+
+Check the main JavaScript files for syntax errors:
+
+```bash
+npm run check
+```
+
+## Tech
+
+- Node.js
+- Express
+- MongoDB
+- HTML / CSS / JavaScript
+
+## License
+
+Licensed under the ISC License. See `LICENSE` for more information.

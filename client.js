@@ -6,19 +6,23 @@
   var THEME_KEY = 'chikochan-theme';
   var preview = null;
 
+  function normalizeTheme(theme) {
+    return theme === 'dark' || theme === 'yotsuba-b' ? theme : 'light';
+  }
+
   function applyTheme(theme) {
     var root = document.documentElement;
-    var isDark = theme === 'dark';
-    if (isDark) root.setAttribute('data-theme', 'dark');
+    theme = normalizeTheme(theme);
+    if (theme !== 'light') root.setAttribute('data-theme', theme);
     else root.removeAttribute('data-theme');
     document.querySelectorAll('.theme-selector').forEach(function (select) {
-      select.value = isDark ? 'dark' : 'light';
+      select.value = theme;
     });
   }
 
   document.addEventListener('change', function (event) {
     if (!event.target.matches('.theme-selector')) return;
-    var theme = event.target.value === 'dark' ? 'dark' : 'light';
+    var theme = normalizeTheme(event.target.value);
     try { window.localStorage.setItem(THEME_KEY, theme); } catch (error) { /* Storage is optional. */ }
     applyTheme(theme);
   });

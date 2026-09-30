@@ -272,7 +272,7 @@ hr {
 
 .thread {
   clear: both;
-  margin: 0 0 14px;
+  margin: 0 0 6px;
   padding-top: 2px;
 }
 
@@ -342,85 +342,74 @@ hr {
 
 .file-info {
   color: var(--muted-text);
-  font-size: 12px;
-  margin: 3px 0 4px;
-  max-width: min(760px, calc(100vw - 18px));
+  font-size: 11px;
+  line-height: 1.2;
+  margin: 0 0 3px;
+  max-width: 100%;
   overflow-wrap: anywhere;
+}
+
+.file-name {
+  display: inline-block;
+  max-width: 14ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  white-space: nowrap;
 }
 
 .file-download {
   font-size: 11px;
+  white-space: nowrap;
 }
 
 .post-attachments {
   align-items: flex-start;
   display: flex;
+  flex: 0 0 auto;
   flex-wrap: wrap;
-  gap: 7px 12px;
-  margin: 0 20px 10px;
-  max-width: min(760px, calc(100vw - 30px));
+  gap: 6px 8px;
+  margin: 0;
+  max-width: 220px;
   min-width: 0;
-}
-
-.reply .post-attachments {
-  margin: 0 20px 8px 0;
-  max-width: calc(100vw - 78px);
 }
 
 .post-attachment {
-  max-width: 340px;
+  width: 220px;
+  max-width: 100%;
   min-width: 0;
 }
 
-.post-attachment .file-info {
-  margin-top: 0;
-  max-width: 340px;
+.reply .post-attachments,
+.reply .post-attachment {
+  width: 180px;
 }
 
-.post-attachment .image-box {
-  float: none;
-  margin: 0;
-}
-
-.post-attachments[data-attachment-count="1"],
-.post-attachments[data-attachment-count="1"] .post-attachment {
-  display: contents;
-}
-
-.post-attachments[data-attachment-count="1"] .image-box {
-  float: left;
-  margin: 0 20px 12px;
-}
-
-.reply .post-attachments[data-attachment-count="1"] .image-box {
-  margin-left: 0;
+.post-attachments-multiple,
+.reply .post-attachments-multiple {
+  width: auto;
+  max-width: min(65%, 676px);
 }
 
 .post-attachments-multiple .post-attachment {
-  border-left: 1px solid var(--reply-border);
-  padding-left: 7px;
-}
-
-.post-attachments-multiple {
-  float: left;
+  flex: 1 1 140px;
 }
 
 .image-box {
-  margin: 0 20px 12px 20px;
-  max-width: 250px;
-  text-align: center;
+  margin: 0;
+  max-width: 100%;
+  text-align: left;
 }
 
 .image-box-reply {
-  margin-left: 0;
-  max-width: 165px;
+  max-width: 100%;
 }
 
 .post-img {
   border: 0;
   height: auto;
   max-height: 180px;
-  max-width: 220px;
+  max-width: min(220px, 100%);
   object-fit: contain;
   vertical-align: top;
   width: auto;
@@ -428,7 +417,7 @@ hr {
 
 .image-box-reply .post-img {
   max-height: 140px;
-  max-width: 150px;
+  max-width: min(150px, 100%);
 }
 
 .video-box {
@@ -440,14 +429,14 @@ hr {
   display: block;
   height: auto;
   max-height: 320px;
-  max-width: min(320px, calc(100vw - 28px));
+  max-width: min(320px, 100%);
   object-fit: contain;
   width: auto;
 }
 
 .image-box-reply .post-video {
   max-height: 220px;
-  max-width: min(240px, calc(100vw - 60px));
+  max-width: min(240px, 100%);
 }
 
 .post-img:hover {
@@ -455,8 +444,24 @@ hr {
 }
 
 .post-body {
+  align-items: flex-start;
+  display: flex;
+  gap: 12px;
   max-width: 100%;
   min-width: 0;
+}
+
+.post-content {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.post-body > .file-info {
+  flex: 0 0 auto;
+}
+
+.post-media-expanded > .post-body {
+  flex-wrap: wrap;
 }
 
 .reply .comment {
@@ -464,7 +469,7 @@ hr {
 }
 
 .comment {
-  margin: 8px 0 12px;
+  margin: 4px 0;
   max-width: 100%;
   min-width: 0;
   overflow-wrap: anywhere;
@@ -477,8 +482,8 @@ blockquote.comment {
   padding: 0;
 }
 
-.op-comment {
-  min-height: 1em;
+.comment:empty {
+  margin: 0;
 }
 
 .greentext {
@@ -516,12 +521,12 @@ blockquote.comment {
   clear: both;
   color: var(--muted-text);
   font-size: 12px;
-  margin: 7px 0 5px 292px;
+  margin: 4px 0 3px 20px;
 }
 
 .replies {
   clear: both;
-  margin: 4px 0 0 18px;
+  margin: 4px 0 0 10px;
 }
 
 .reply-container {
@@ -565,18 +570,24 @@ blockquote.comment {
 .reply-form-container {
   clear: both;
   font-size: 12px;
-  margin: 8px 0 12px 26px;
+  margin: 6px 0 6px 20px;
 }
 
-.reply-form-container summary {
+/* Header Reply links open this existing form; native links go to the open
+   thread form when JavaScript is unavailable. No duplicate bottom control. */
+.reply-form-container:not([open]) {
+  display: none;
+}
+
+.reply-form-container > summary {
   color: var(--link-color);
   cursor: pointer;
-  display: inline-block;
-  margin-bottom: 5px;
-  text-decoration: underline;
+  font-size: 11px;
+  margin-bottom: 2px;
+  width: fit-content;
 }
 
-.reply-form-container summary:hover {
+.reply-form-container > summary:hover {
   color: var(--link-hover-color);
 }
 
@@ -999,42 +1010,32 @@ blockquote.comment {
     margin: 3px 0 0;
   }
 
-  .image-box {
-    margin: 0 12px 10px 8px;
-    max-width: 165px;
+  .post-body {
+    gap: 8px;
   }
 
-  .post-attachments {
-    gap: 6px 8px;
-    margin: 0 10px 8px 8px;
-    max-width: calc(100vw - 24px);
-  }
-
+  .post-attachments,
   .reply .post-attachments {
-    margin-left: 0;
-    max-width: calc(100vw - 48px);
+    max-width: 42%;
   }
 
-  .post-attachment .image-box {
-    margin: 0;
-  }
-
-  .post-attachments[data-attachment-count="1"] .image-box {
-    margin: 0 12px 10px 8px;
-  }
-
-  .reply .post-attachments[data-attachment-count="1"] .image-box {
-    margin-left: 0;
+  .post-attachment,
+  .reply .post-attachment {
+    width: 155px;
   }
 
   .post-img {
     max-height: 145px;
-    max-width: 155px;
+    max-width: min(155px, 100%);
+  }
+
+  .image-box-reply .post-img {
+    max-width: min(150px, 100%);
   }
 
   .post-video {
     max-height: 240px;
-    max-width: calc(100vw - 30px);
+    max-width: 100%;
   }
 
   .omitted-replies {
@@ -1076,28 +1077,45 @@ blockquote.comment {
 }
 
 @media (max-width: 520px) {
-  .post-attachments,
-  .reply .post-attachments {
-    margin-left: 0;
-    max-width: calc(100vw - 24px);
+  /* A full-width header leaves room for controls on small screens. */
+  .op .post-body {
+    display: grid;
+    grid-template-columns: minmax(0, 38%) minmax(0, 1fr);
+    gap: 4px 8px;
   }
 
-  .reply .post-attachments {
-    max-width: calc(100vw - 48px);
+  .op .post-content {
+    display: contents;
+  }
+
+  .op .thread-header {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+
+  .op .post-attachments {
+    grid-column: 1;
+    grid-row: 2;
+    max-width: 100%;
+  }
+
+  .op .comment {
+    grid-column: 2;
+    grid-row: 2;
+  }
+
+  .op .post-body:not(.post-body-with-media) .comment,
+  .op.post-media-expanded .post-attachments,
+  .op.post-media-expanded .comment {
+    grid-column: 1 / -1;
+    grid-row: auto;
   }
 }
 
 /* Functional additions inherit the original ChikoChan palette and spacing. */
 .postContainer,
-.post {
+.op {
   max-width: 100%;
-}
-
-.opContainer::after,
-.post::after {
-  clear: both;
-  content: "";
-  display: table;
 }
 
 .delete {
@@ -1122,7 +1140,9 @@ blockquote.comment {
   line-height: 13px;
   list-style: none;
   padding: 0 1px;
+  text-align: center;
   user-select: none;
+  width: 14px;
 }
 
 .post-menu > summary::-webkit-details-marker {
@@ -1347,13 +1367,14 @@ blockquote.comment {
 }
 
 .image-box.image-expanded {
-  max-width: calc(100vw - 50px);
+  max-width: 100%;
 }
 
-.post-attachments-expanded,
-.post-attachment-expanded {
+.post .post-attachments-expanded,
+.post .post-attachment-expanded {
   flex-basis: 100%;
-  max-width: calc(100vw - 50px);
+  width: 100%;
+  max-width: 100%;
 }
 
 .image-box.image-expanded .fileThumb {
@@ -1363,7 +1384,7 @@ blockquote.comment {
 .expanded-image .post-img {
   height: auto;
   max-height: none !important;
-  max-width: calc(100vw - 50px) !important;
+  max-width: 100% !important;
   width: auto;
 }
 
@@ -1387,9 +1408,12 @@ blockquote.comment {
   z-index: 1000;
 }
 
-.quote-preview .image-box {
-  float: left;
-  margin-left: 0;
+.quote-preview .post-attachments {
+  max-width: 40%;
+}
+
+.quote-preview .post-img {
+  max-width: 100%;
 }
 
 .post-hidden {
@@ -2370,6 +2394,106 @@ blockquote.comment {
 
 .board-extras .theme-toggle {
   margin-right: 6px;
+}
+
+/* Yotsuba B changes colors only. Repeat tokens on body so the selected palette
+   also applies to boards with administrator-defined default colors. */
+html[data-theme="yotsuba-b"],
+html[data-theme="yotsuba-b"] body {
+  color-scheme: light;
+  --bg-color: #eef2ff;
+  --bg-gradient: none;
+  --text-color: #000000;
+  --muted-text: #707070;
+  --link-color: #34345c;
+  --link-hover-color: #dd0000;
+  --board-title-color: #0f0c5d;
+  --subject-color: #0f0c5d;
+  --name-color: #117743;
+  --form-label-bg: #b7c5d9;
+  --form-label-text: #000000;
+  --form-bg: #eef2ff;
+  --form-border: #b7c5d9;
+  --reply-bg: #d6daf0;
+  --reply-border: #b7c5d9;
+  --reply-prefix-color: #b7c5d9;
+  --quote-text-color: #789922;
+  --quotelink-color: #34345c;
+  --panel-header-bg: #d6daf0;
+  --nav-border: #8899aa;
+  --input-bg: #ffffff;
+  --input-border: #aaaaaa;
+}
+
+html[data-theme="yotsuba-b"] .board-list {
+  border-color: var(--nav-border);
+}
+
+html[data-theme="yotsuba-b"] :is(input, textarea, select):not(
+  [type="checkbox"], [type="radio"], [type="file"], [type="range"],
+  [type="submit"], [type="button"], [type="reset"]
+) {
+  background: var(--input-bg);
+  border-color: var(--input-border);
+  color: var(--text-color);
+}
+
+html[data-theme="yotsuba-b"] input[type="submit"],
+html[data-theme="yotsuba-b"] button:not(.post-hide-button):not(.media-spoiler-button) {
+  background: var(--reply-bg);
+  border-color: var(--input-border);
+  color: var(--text-color);
+}
+
+html[data-theme="yotsuba-b"] input[type="submit"]:hover,
+html[data-theme="yotsuba-b"] button:not(.post-hide-button):not(.media-spoiler-button):hover {
+  background: var(--form-label-bg);
+}
+
+html[data-theme="yotsuba-b"] .field-hint {
+  color: var(--muted-text);
+}
+
+html[data-theme="yotsuba-b"] .catalog-card {
+  background: var(--reply-bg);
+}
+
+html[data-theme="yotsuba-b"] .catalog-no-thumb,
+html[data-theme="yotsuba-b"] .latest-image-link {
+  background: var(--bg-color);
+}
+
+html[data-theme="yotsuba-b"] .board-directory h2,
+html[data-theme="yotsuba-b"] .latest-panel h2 {
+  color: var(--subject-color);
+}
+
+html[data-theme="yotsuba-b"] .spoiler {
+  background: #000000;
+  color: #000000;
+}
+
+html[data-theme="yotsuba-b"] .spoiler a {
+  color: inherit;
+}
+
+html[data-theme="yotsuba-b"] .spoiler:hover,
+html[data-theme="yotsuba-b"] .spoiler:focus {
+  color: #ffffff;
+}
+
+html[data-theme="yotsuba-b"] .post-menu-panel,
+html[data-theme="yotsuba-b"] .quote-preview {
+  box-shadow: none;
+}
+
+html[data-theme="yotsuba-b"] .post-highlighted {
+  box-shadow: none;
+  outline: 2px solid var(--link-hover-color);
+}
+
+html[data-theme="yotsuba-b"] .site-banner h1 {
+  text-shadow: none;
 }
 
 /* Dark mode overrides. */

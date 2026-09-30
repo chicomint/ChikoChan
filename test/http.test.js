@@ -210,7 +210,7 @@ test('escapes post HTML and renders dead citations without unsafe links', async 
   assert.match(html, /class="deadlink" data-post-id="99999"/);
 });
 
-test('single thumbnails float beside comments while long content wraps safely', async t => {
+test('post layout groups media and content while preserving safe comments and controls', async t => {
   const server = await testServer(t);
   const longWord = 'chiko'.repeat(500);
   const hostile = '<img src=x onerror=alert(1)>';
@@ -232,22 +232,17 @@ test('single thumbnails float beside comments while long content wraps safely', 
 
   for (const html of [threadHtml, boardHtml]) {
     assert.match(html, /class="post-body post-body-with-media"[\s\S]+class="post-attachments"[\s\S]+class="comment op-comment postMessage"/);
+    assert.match(html, /class="post-content">[\s\S]+class="thread-header postInfo desktop"/);
+    assert.match(html, /class="file-name"[^>]+title="pixel.png">pixel.png<\/a>/);
+    assert.match(html, new RegExp(`class="quote-reply-link replylink"[^>]+data-quote-id="${thread.id}"`));
     assert.match(html, new RegExp(`id="p${reply.id}"[\\s\\S]+class="post-body post-body-with-media"[\\s\\S]+id="m${reply.id}"`));
     assert.match(html, /class="post-img"[^>]+width="1600" height="1200"/);
     assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;/);
     assert.doesNotMatch(html, /<img src=x onerror=alert\(1\)>/);
   }
-  const bodyRule = /\.post-body\s*\{([^}]+)\}/.exec(style)?.[1] || '';
   const commentRule = /^\.comment\s*\{([^}]+)\}/m.exec(style)?.[1] || '';
-  const singleAttachmentRule = /\.post-attachments\[data-attachment-count="1"\],\s*\.post-attachments\[data-attachment-count="1"\] \.post-attachment\s*\{([^}]+)\}/.exec(style)?.[1] || '';
-  const singleImageRule = /\.post-attachments\[data-attachment-count="1"\] \.image-box\s*\{([^}]+)\}/.exec(style)?.[1] || '';
-  assert.match(bodyRule, /min-width:\s*0/);
-  assert.doesNotMatch(bodyRule, /display:\s*flex/);
-  assert.match(singleAttachmentRule, /display:\s*contents/);
-  assert.match(singleImageRule, /float:\s*left/);
   assert.match(commentRule, /overflow-wrap:\s*anywhere/);
   assert.match(commentRule, /word-break:\s*break-word/);
-  assert.doesNotMatch(commentRule, /flex:/);
 });
 
 test('file-only deletion retains the post and removes its upload', async t => {

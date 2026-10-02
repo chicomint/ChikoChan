@@ -997,6 +997,27 @@ blockquote.comment {
   margin: 5px 20px 10px;
 }
 
+/* Single OP thumbnails, rather than fixed-width file wrappers, set the text inset. */
+.threads-container .op:not(.post-media-expanded) .post-attachments:not(.post-attachments-multiple),
+.threads-container .op:not(.post-media-expanded) .post-attachments:not(.post-attachments-multiple) > .post-attachment {
+  display: contents;
+}
+
+.threads-container .op:not(.post-media-expanded) .post-attachments:not(.post-attachments-multiple) .file-info {
+  margin: 5px 20px 3px;
+}
+
+.threads-container .op:not(.post-media-expanded) .post-attachments:not(.post-attachments-multiple) .image-box {
+  float: left;
+  margin: 5px 20px 10px;
+  max-width: calc(100% - 40px);
+}
+
+.threads-container .op:not(.post-media-expanded) .post-attachments:not(.post-attachments-multiple) .post-img {
+  /* A viewport bound lets the float measure the image without a percentage sizing cycle. */
+  max-width: min(220px, calc(100vw - 56px));
+}
+
 .threads-container .op .post-attachments-expanded {
   float: none;
   width: calc(100% - 40px);
@@ -1019,6 +1040,10 @@ blockquote.comment {
   .threads-container > .thread {
     margin-left: 4px;
     margin-right: 4px;
+  }
+
+  .threads-container .op:not(.post-media-expanded) .post-attachments:not(.post-attachments-multiple) .post-img {
+    max-width: min(155px, calc(100vw - 56px));
   }
 
   header {

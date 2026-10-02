@@ -1028,6 +1028,25 @@ blockquote.comment {
   max-width: 94%;
 }
 
+/* Single reply attachments use their thumbnail width instead of a media column. */
+.threads-container .reply:not(.post-media-expanded) .post-body:has(> .post-attachments:not(.post-attachments-multiple)) {
+  display: block;
+}
+
+.threads-container .reply:not(.post-media-expanded) .post-attachments:not(.post-attachments-multiple),
+.threads-container .reply:not(.post-media-expanded) .post-attachments:not(.post-attachments-multiple) > .post-attachment {
+  display: contents;
+}
+
+.threads-container .reply:not(.post-media-expanded) .post-attachments:not(.post-attachments-multiple) .image-box {
+  float: left;
+  margin-right: 20px;
+}
+
+.threads-container .reply:not(.post-media-expanded) .post-attachments:not(.post-attachments-multiple) .post-img {
+  max-width: 150px;
+}
+
 .threads-container .post .expanded-image .post-img {
   max-width: 100% !important;
 }

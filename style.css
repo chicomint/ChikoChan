@@ -978,9 +978,47 @@ blockquote.comment {
   margin-top: 8px;
 }
 
+/* Match the board gutter without moving navigation, forms, or other pages. */
+.threads-container > .thread {
+  margin-left: 3px;
+  margin-right: 3px;
+}
+
+.threads-container .op {
+  display: flow-root;
+}
+
+.threads-container .op .post-body {
+  display: block;
+}
+
+.threads-container .op .post-attachments {
+  float: left;
+  margin: 5px 20px 10px;
+}
+
+.threads-container .op .post-attachments-expanded {
+  float: none;
+  width: calc(100% - 40px);
+}
+
+.threads-container .post.reply {
+  margin: 0.2em 4px;
+  max-width: 94%;
+}
+
+.threads-container .post .expanded-image .post-img {
+  max-width: 100% !important;
+}
+
 @media (max-width: 768px) {
   body {
     padding: 0 4px 18px;
+  }
+
+  .threads-container > .thread {
+    margin-left: 4px;
+    margin-right: 4px;
   }
 
   header {

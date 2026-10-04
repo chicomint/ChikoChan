@@ -207,6 +207,9 @@ function createApp(overrides = {}) {
     next();
   });
 
+  // Configured applications never expose setup, including direct createApp users.
+  app.use('/install', (request, response) => response.redirect(303, '/'));
+
   const standardFormParser = express.urlencoded({ extended: false, limit: '24kb', parameterLimit: 64 });
   const staffFormParser = express.urlencoded({ extended: false, limit: '24kb', parameterLimit: 256 });
   app.use((request, response, next) => {

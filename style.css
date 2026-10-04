@@ -674,6 +674,24 @@ blockquote.comment {
   font-size: 12px;
 }
 
+.installer-page { max-width: 640px; }
+.installer-logo { vertical-align: middle; }
+.installer-steps { display: flex; flex-wrap: wrap; gap: 12px; padding: 0; list-style: none; color: var(--muted-text); }
+.installer-steps [aria-current="step"] { color: var(--board-title-color); font-weight: bold; }
+.installer-panel form { display: grid; gap: 8px; margin-top: 16px; }
+.installer-panel label { font-weight: bold; }
+.installer-panel input, .installer-panel textarea { width: 100%; border: 1px solid var(--form-border); padding: 7px; font: inherit; }
+.installer-panel button { width: fit-content; padding: 6px 12px; }
+.installer-storage-options { border: 0; padding: 0; margin: 4px 0; }
+.installer-storage-options legend { margin-bottom: 12px; }
+.installer-panel .installer-storage-option { display: flex; gap: 9px; margin: 12px 0; font-weight: normal; cursor: pointer; }
+.installer-storage-option strong, .installer-storage-option span span { display: block; }
+.installer-storage-option strong { margin-bottom: 4px; }
+.installer-storage-option span span { color: var(--muted-text); line-height: 1.5; }
+.installer-panel input[type="radio"] { width: auto; margin: 2px 0 0; align-self: flex-start; accent-color: var(--board-title-color); }
+.installer-mongo { display: grid; gap: 8px; border: 1px solid var(--form-border); padding: 12px; margin: 0; }
+.installer-mongo[hidden] { display: none; }
+
 .admin-toolbar,
 .admin-thread-header,
 .admin-reply {

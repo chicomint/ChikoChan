@@ -15,7 +15,7 @@
     "load:test": "node scripts/load-benchmark.js",
     "diagnose": "node scripts/diagnose.js",
     "test": "node --test",
-    "check": "node --check server.js && node --check app.js && node --check client.js"
+    "check": "node --check server.js && node --check app.js && node --check client.js && node --check config.js && node --check lib/bootstrap.js && node --check lib/installer.js && node --check lib/installer-client.js && node --check lib/install-state.js"
   },
   "engines": {
     "node": ">=22"

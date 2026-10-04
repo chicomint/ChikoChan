@@ -1,24 +1,21 @@
 'use strict';
 
-const { createApp } = require('./app');
-
-const app = createApp();
-const { config, maintenance, rateLimitStore, store, uploads } = app.locals.chikochan;
-const { host, port } = config;
+const { createBootstrap } = require('./lib/bootstrap');
+let bootstrap;
 let shuttingDown = false;
 let server;
 
 async function start() {
-  await store.ready;
-  maintenance.start();
-  server = app.listen(port, host, error => {
-    if (error) {
-      console.error(`Could not start ChikoChan: ${error.message}`);
-      process.exitCode = 1;
-      return;
-    }
-    console.log(`ChikoChan is running at http://${host === '0.0.0.0' ? 'localhost' : host}:${port}`);
+  bootstrap = await createBootstrap();
+  if (shuttingDown) {
+    await bootstrap.close();
+    return;
+  }
+  const { app, config: { host, port } } = bootstrap;
+  await new Promise((resolve, reject) => {
+    server = app.listen(port, host, error => error ? reject(error) : resolve());
   });
+  console.log(`ChikoChan is running at http://${host === '0.0.0.0' ? 'localhost' : host}:${server.address().port}`);
   return server;
 }
 
@@ -28,11 +25,7 @@ function shutdown(signal) {
   console.log(`${signal} received; closing the HTTP server.`);
 
   if (!server) {
-    void maintenance.stop()
-      .then(() => uploads.close?.())
-      .then(() => rateLimitStore.close?.())
-      .then(() => store.close?.())
-      .finally(() => process.exit());
+    // start() closes resources if startup completes after this signal.
     return;
   }
 
@@ -46,10 +39,7 @@ function shutdown(signal) {
   server.closeIdleConnections?.();
   server.close(async error => {
     clearTimeout(forceClose);
-    await maintenance.stop();
-    await uploads.close?.();
-    await rateLimitStore.close?.();
-    await store.close?.();
+    await bootstrap.close();
     if (error) {
       console.error(error);
       process.exitCode = 1;
@@ -60,10 +50,11 @@ function shutdown(signal) {
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 
-const started = start().catch(error => {
-  console.error(`Could not start ChikoChan: ${error.message}`);
+const started = start().catch(async () => {
+  // MongoDB errors can contain credentials. Keep startup diagnostics private.
+  console.error('Could not start ChikoChan. Check database access and the configuration requirements in README.md.');
   process.exitCode = 1;
-  throw error;
+  await bootstrap?.close();
 });
 
 module.exports = started;

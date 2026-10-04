@@ -322,6 +322,85 @@ function loadPages(rootDir) {
   return pages;
 }
 
+function validateStartupConfig(config) {
+  if (!['mongodb', 'json'].includes(config.storage)) {
+    throw new Error('storage must be either "mongodb" or "json".');
+  }
+  if (!['development', 'test', 'production'].includes(config.deployment.environment)) {
+    throw new Error('NODE_ENV must be development, test, or production.');
+  }
+  if (typeof config.deployment.publicOrigin !== 'string'
+    || (config.deployment.publicOrigin && !/^https?:\/\/[^\s/]+(?::\d+)?$/i.test(config.deployment.publicOrigin))) {
+    throw new Error('PUBLIC_ORIGIN must be an http(s) origin without a path.');
+  }
+  if (typeof config.deployment.instanceId !== 'string' || config.deployment.instanceId.length > 100
+    || /[\u0000-\u001f\u007f]/.test(config.deployment.instanceId)) {
+    throw new Error('INSTANCE_ID must be a string no longer than 100 characters.');
+  }
+  if (typeof config.deployment.multiInstance !== 'boolean') {
+    throw new Error('MULTI_INSTANCE must be true or false.');
+  }
+  if (config.trustProxy === true && config.deployment.environment === 'production') {
+    throw new Error('TRUST_PROXY=true trusts arbitrary forwarding paths and is forbidden in production; use a hop count or explicit CIDR list.');
+  }
+  if (Array.isArray(config.trustProxy)) {
+    if (!config.trustProxy.length || config.trustProxy.length > 100
+      || config.trustProxy.some(entry => typeof entry !== 'string' || !entry || entry.length > 100
+        || /[\u0000-\u001f\u007f]/.test(entry))) {
+      throw new Error('TRUST_PROXY must contain between 1 and 100 bounded proxy addresses or CIDRs.');
+    }
+  } else if (config.trustProxy !== false && config.trustProxy !== true
+    && (!Number.isInteger(config.trustProxy) || config.trustProxy < 1 || config.trustProxy > 10)) {
+    throw new Error('TRUST_PROXY must be false, a hop count from 1 to 10, or a comma-separated address/CIDR list.');
+  }
+  if (!Number.isInteger(config.port) || config.port < 0 || config.port > 65535) {
+    throw new Error('port must be an integer between 0 and 65535.');
+  }
+  if (!isPlainObject(config.security) || !isPlainObject(config.security.hsts)
+    || typeof config.security.hsts.enabled !== 'boolean'
+    || typeof config.security.hsts.includeSubDomains !== 'boolean'
+    || typeof config.security.hsts.preload !== 'boolean'
+    || !Number.isInteger(config.security.hsts.maxAgeSeconds)
+    || config.security.hsts.maxAgeSeconds < 0
+    || config.security.hsts.maxAgeSeconds > 63072000) {
+    throw new Error('security.hsts must contain typed values and maxAgeSeconds between 0 and 63072000.');
+  }
+  if (config.security.hsts.preload
+    && (!config.security.hsts.enabled || !config.security.hsts.includeSubDomains
+      || config.security.hsts.maxAgeSeconds < 31536000)) {
+    throw new Error('HSTS preload requires HSTS, includeSubDomains, and a max age of at least one year.');
+  }
+}
+
+// Read only the settings needed before a store can be constructed. The real
+// application still calls loadConfig(), including all production checks.
+function loadStartupConfig(overrides = {}) {
+  const configPath = path.resolve(process.env.CHIKO_CONFIG || path.join(ROOT_DIR, 'config.json'));
+  const config = mergeConfig(DEFAULTS, readConfigFile(configPath));
+  const startup = mergeConfig(mergeConfig(config, {
+    rootDir: ROOT_DIR,
+    host: process.env.HOST || config.host,
+    port: envNumber('PORT', config.port),
+    storage: process.env.STORAGE || config.storage,
+    mongoUrl: process.env.MONGO_URL || process.env.MONGODB_URI || config.mongoUrl,
+    trustProxy: envTrustProxy(config.trustProxy),
+    deployment: {
+      environment: envString('NODE_ENV', config.deployment.environment),
+      publicOrigin: envString('PUBLIC_ORIGIN', config.deployment.publicOrigin),
+      instanceId: envString('INSTANCE_ID', config.deployment.instanceId),
+      multiInstance: envBoolean('MULTI_INSTANCE', config.deployment.multiInstance)
+    },
+    security: { hsts: {
+      enabled: envBoolean('HSTS_ENABLED', config.security.hsts.enabled),
+      maxAgeSeconds: envNumber('HSTS_MAX_AGE_SECONDS', config.security.hsts.maxAgeSeconds),
+      includeSubDomains: envBoolean('HSTS_INCLUDE_SUBDOMAINS', config.security.hsts.includeSubDomains),
+      preload: envBoolean('HSTS_PRELOAD', config.security.hsts.preload)
+    } }
+  }), overrides);
+  validateStartupConfig(startup);
+  return startup;
+}
+
 function loadConfig(overrides = {}) {
   const configPath = path.resolve(process.env.CHIKO_CONFIG || path.join(ROOT_DIR, 'config.json'));
   const fromFile = readConfigFile(configPath);
@@ -364,6 +443,10 @@ function loadConfig(overrides = {}) {
     dataDir: process.env.DATA_DIR || config.dataDir,
     mongoUrl: process.env.MONGO_URL || process.env.MONGODB_URI || config.mongoUrl,
     mongoDbName: process.env.MONGO_DB_NAME || config.mongoDbName,
+    site: {
+      title: envString('SITE_NAME', config.site.title),
+      description: envString('SITE_DESCRIPTION', config.site.description)
+    },
     mongo: {
       requireTransactions: envBoolean('MONGO_REQUIRE_TRANSACTIONS', config.mongo.requireTransactions)
     },
@@ -541,43 +624,9 @@ function loadConfig(overrides = {}) {
   config.deployment.isProduction = config.deployment.environment === 'production';
   config.quarantineDir = path.join(config.dataDir, 'quarantine');
 
-  if (!['mongodb', 'json'].includes(config.storage)) {
-    throw new Error('storage must be either "mongodb" or "json".');
-  }
+  validateStartupConfig(config);
   if (!isPlainObject(config.mongo) || typeof config.mongo.requireTransactions !== 'boolean') {
     throw new Error('mongo.requireTransactions must be true or false.');
-  }
-
-  if (!['development', 'test', 'production'].includes(config.deployment.environment)) {
-    throw new Error('NODE_ENV must be development, test, or production.');
-  }
-  if (typeof config.deployment.publicOrigin !== 'string'
-    || (config.deployment.publicOrigin && !/^https?:\/\/[^\s/]+(?::\d+)?$/i.test(config.deployment.publicOrigin))) {
-    throw new Error('PUBLIC_ORIGIN must be an http(s) origin without a path.');
-  }
-  if (typeof config.deployment.instanceId !== 'string' || config.deployment.instanceId.length > 100
-    || /[\u0000-\u001f\u007f]/.test(config.deployment.instanceId)) {
-    throw new Error('INSTANCE_ID must be a string no longer than 100 characters.');
-  }
-  if (typeof config.deployment.multiInstance !== 'boolean') {
-    throw new Error('MULTI_INSTANCE must be true or false.');
-  }
-  if (config.trustProxy === true && config.deployment.isProduction) {
-    throw new Error('TRUST_PROXY=true trusts arbitrary forwarding paths and is forbidden in production; use a hop count or explicit CIDR list.');
-  }
-  if (Array.isArray(config.trustProxy)) {
-    if (!config.trustProxy.length || config.trustProxy.length > 100
-      || config.trustProxy.some(entry => typeof entry !== 'string' || !entry || entry.length > 100
-        || /[\u0000-\u001f\u007f]/.test(entry))) {
-      throw new Error('TRUST_PROXY must contain between 1 and 100 bounded proxy addresses or CIDRs.');
-    }
-  } else if (config.trustProxy !== false && config.trustProxy !== true
-    && (!Number.isInteger(config.trustProxy) || config.trustProxy < 1 || config.trustProxy > 10)) {
-    throw new Error('TRUST_PROXY must be false, a hop count from 1 to 10, or a comma-separated address/CIDR list.');
-  }
-
-  if (!Number.isInteger(config.port) || config.port < 0 || config.port > 65535) {
-    throw new Error('port must be an integer between 0 and 65535.');
   }
 
   const positiveLimits = [
@@ -704,15 +753,6 @@ function loadConfig(overrides = {}) {
     || !/^[a-z]{2,8}(?:-[a-z0-9]{1,8})*$/i.test(String(config.i18n.defaultLanguage || ''))) {
     throw new Error('i18n.defaultLanguage must be a valid language tag.');
   }
-  if (!isPlainObject(config.security) || !isPlainObject(config.security.hsts)
-    || typeof config.security.hsts.enabled !== 'boolean'
-    || typeof config.security.hsts.includeSubDomains !== 'boolean'
-    || typeof config.security.hsts.preload !== 'boolean'
-    || !Number.isInteger(config.security.hsts.maxAgeSeconds)
-    || config.security.hsts.maxAgeSeconds < 0
-    || config.security.hsts.maxAgeSeconds > 63072000) {
-    throw new Error('security.hsts must contain typed values and maxAgeSeconds between 0 and 63072000.');
-  }
   if (!isPlainObject(config.staffMfa) || typeof config.staffMfa.enabled !== 'boolean'
     || typeof config.staffMfa.issuer !== 'string' || !config.staffMfa.issuer.trim()
     || config.staffMfa.issuer.length > 80 || /[\u0000-\u001f\u007f]/.test(config.staffMfa.issuer)
@@ -720,11 +760,6 @@ function loadConfig(overrides = {}) {
     throw new Error('staffMfa must contain a boolean enabled flag, a bounded issuer, and an environment-only key.');
   }
   if (config.staffMfa.enabled) parseEncryptionKey(config.staffMfa.encryptionKey);
-  if (config.security.hsts.preload
-    && (!config.security.hsts.enabled || !config.security.hsts.includeSubDomains
-      || config.security.hsts.maxAgeSeconds < 31536000)) {
-    throw new Error('HSTS preload requires HSTS, includeSubDomains, and a max age of at least one year.');
-  }
   if (!isPlainObject(config.privacy)
     || typeof config.privacy.abuseFingerprintSecret !== 'string'
     || config.privacy.abuseFingerprintSecret.length > 500
@@ -872,4 +907,4 @@ function loadConfig(overrides = {}) {
   return config;
 }
 
-module.exports = { DEFAULTS, loadConfig, mergeConfig };
+module.exports = { DEFAULTS, ENV_FILE, loadConfig, loadStartupConfig, mergeConfig };

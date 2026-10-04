@@ -1,4 +1,5 @@
 .env
+.env.install-lock
 posts.json
 posts.json.backup
 src/

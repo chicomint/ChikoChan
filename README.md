@@ -93,14 +93,6 @@ ADMIN_PASSWORD="your-long-password"
 ADMIN_SESSION_SECRET="your-random-secret"
 ```
 
-You can generate a session secret with:
-
-```bash
-node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
-```
-
-Keep your `.env` file private.
-
 ## Development
 
 Start the server with Node.js watch mode:

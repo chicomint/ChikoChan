@@ -40,11 +40,7 @@ Then open:
 http://localhost:3000
 ```
 
-Follow the setup on the page. Choose **Local storage** if you don't want to set up MongoDB.
-Give your site a name, choose an admin password with at least 12 characters, and click Install.
-
-ChikoChan saves the settings for you. You don't need to edit `.env` or restart the server.
-Local posts and uploads will be stored inside the `data/` folder.
+Follow the setup on the page.
 
 To skip the installer for local testing, you can still use:
 

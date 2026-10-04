@@ -39,55 +39,17 @@ Then open:
 ```text
 http://localhost:3000
 ```
+Follow the setup on the page. The configuration will be saved in a `.env` file. If you want to change or add more settings later, check `env.example.txt` for the available options.
 
-Follow the setup on the page.
 
-To skip the installer for local testing, you can still use:
+
+(To skip the installer for local testing, you can still use):
 
 ```bash
 npm run start:local
 ```
 
-## Using MongoDB
 
-MongoDB is optional for local use. It's the recommended choice for larger sites and is required in production mode.
-
-Choose **MongoDB** during setup, enter your connection string, and test the connection before continuing.
-You need a running MongoDB server or a hosted MongoDB connection.
-
-If you prefer to configure it yourself, copy `env.example.txt` to `.env` and change:
-
-```env
-STORAGE=mongodb
-MONGO_URL="your-mongodb-connection-string"
-MONGO_DB_NAME="chikochan"
-DATA_DIR="./data"
-```
-
-Then start normally:
-
-```bash
-npm start
-```
-
-Existing setups will start normally without showing the installer again.
-
-On hosting platforms that can't save a permanent `.env`, set the values in the platform's environment settings.
-You can use `INSTALLER_DISABLED=true` to turn off web setup.
-
-Production mode needs a few extra security settings.
-Check `env.example.txt` before setting `NODE_ENV=production`.
-
-## Admin Panel
-
-After using the installer, open `/admin` and sign in with the password you chose.
-
-For manual setup, add these to your `.env` file:
-
-```env
-ADMIN_PASSWORD="your-long-password"
-ADMIN_SESSION_SECRET="your-random-secret"
-```
 
 ## Development
 

@@ -166,6 +166,9 @@ header p {
   background-color: var(--form-bg);
   border-collapse: collapse;
   font-size: 12px;
+  table-layout: fixed;
+  width: 480px;
+  max-width: 100%;
 }
 
 .post-form-table td,
@@ -173,6 +176,7 @@ header p {
   border: 1px solid var(--form-border);
   padding: 2px 4px;
   vertical-align: middle;
+  overflow-wrap: anywhere;
 }
 
 .post-form-table .label,
@@ -350,12 +354,7 @@ hr {
 }
 
 .file-name {
-  display: inline-block;
-  max-width: 14ch;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  vertical-align: bottom;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .file-download {
@@ -364,35 +363,36 @@ hr {
 }
 
 .post-attachments {
-  align-items: flex-start;
   display: flex;
-  flex: 0 0 auto;
+  float: left;
   flex-wrap: wrap;
+  align-items: flex-start;
   gap: 6px 8px;
-  margin: 0;
-  max-width: 220px;
+  margin: 0 20px 10px 15px;
+  width: 250px;
+  max-width: calc(100% - 35px);
   min-width: 0;
 }
 
 .post-attachment {
-  width: 220px;
+  width: 250px;
   max-width: 100%;
   min-width: 0;
 }
 
 .reply .post-attachments,
 .reply .post-attachment {
-  width: 180px;
+  width: 150px;
+}
+
+.reply .post-attachments {
+  margin: 2px 16px 6px 0;
 }
 
 .post-attachments-multiple,
 .reply .post-attachments-multiple {
-  width: auto;
+  width: max-content;
   max-width: min(65%, 676px);
-}
-
-.post-attachments-multiple .post-attachment {
-  flex: 1 1 140px;
 }
 
 .image-box {
@@ -408,8 +408,8 @@ hr {
 .post-img {
   border: 0;
   height: auto;
-  max-height: 180px;
-  max-width: min(220px, 100%);
+  max-height: 250px;
+  max-width: 100%;
   object-fit: contain;
   vertical-align: top;
   width: auto;
@@ -421,51 +421,94 @@ hr {
 }
 
 .video-box {
-  max-width: 340px;
   position: relative;
+}
+
+.video-preview {
+  display: inline-block;
+  position: relative;
+  max-width: 100%;
+  vertical-align: top;
+}
+
+.video-preview[hidden] {
+  display: none;
+}
+
+.video-placeholder {
+  align-items: center;
+  background: var(--reply-bg);
+  border: 1px solid var(--reply-border);
+  display: flex;
+  height: 90px;
+  justify-content: center;
+  width: 150px;
+  max-width: 100%;
+  padding-top: 36px;
+}
+
+.video-play-icon {
+  background: rgba(0, 0, 0, 0.75);
+  color: #ffffff;
+  font-size: 18px;
+  left: 50%;
+  line-height: 1;
+  padding: 7px 9px;
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.video-preview:focus-visible {
+  outline: 2px solid var(--link-color);
+  outline-offset: 2px;
 }
 
 .post-video {
   display: block;
   height: auto;
-  max-height: 320px;
-  max-width: min(320px, 100%);
+  width: 640px;
+  max-height: 70vh;
+  max-width: 100%;
   object-fit: contain;
-  width: auto;
 }
 
-.image-box-reply .post-video {
-  max-height: 220px;
-  max-width: min(240px, 100%);
+[data-collapse-video] {
+  margin-left: 4px;
+  white-space: nowrap;
 }
 
 .post-img:hover {
   cursor: pointer;
 }
 
+/* One formatting context contains each post's floats. Text remains in normal
+   flow, so paragraphs can continue below a thumbnail without detached columns. */
 .post-body {
-  align-items: flex-start;
-  display: flex;
-  gap: 12px;
+  display: flow-root;
   max-width: 100%;
   min-width: 0;
 }
 
 .post-content {
-  flex: 1 1 auto;
-  min-width: 0;
+  display: contents;
 }
 
-.post-body > .file-info {
-  flex: 0 0 auto;
+.op .thread-header {
+  display: block;
+  min-height: 16px;
 }
 
-.post-media-expanded > .post-body {
-  flex-wrap: wrap;
+.op .thread-header > * {
+  margin-right: 4px;
+}
+
+.op .comment {
+  margin: 12px 20px;
 }
 
 .reply .comment {
-  max-width: 72ch;
+  margin: 12px 20px 10px;
 }
 
 .comment {
@@ -551,7 +594,7 @@ blockquote.comment {
   border: 1px solid var(--reply-border);
   display: inline-block;
   flex: 0 1 auto;
-  max-width: min(calc(100vw - 58px), 96ch);
+  max-width: min(calc(100% - 24px), 110ch);
   min-width: 0;
   overflow-wrap: anywhere;
   padding: 3px 5px 4px;
@@ -560,7 +603,7 @@ blockquote.comment {
 }
 
 .reply.post-media-expanded {
-  max-width: calc(100vw - 58px);
+  max-width: calc(100% - 24px);
 }
 
 .reply-header {
@@ -593,6 +636,7 @@ blockquote.comment {
 
 .reply-form-table {
   font-size: 11px;
+  width: 420px;
 }
 
 .reply-form-table .label {
@@ -1002,73 +1046,6 @@ blockquote.comment {
   margin-right: 3px;
 }
 
-.threads-container .op {
-  display: flow-root;
-}
-
-.threads-container .op .post-body {
-  display: block;
-}
-
-.threads-container .op .post-attachments {
-  float: left;
-  margin: 5px 20px 10px;
-}
-
-/* Single OP thumbnails, rather than fixed-width file wrappers, set the text inset. */
-.threads-container .op:not(.post-media-expanded) .post-attachments:not(.post-attachments-multiple),
-.threads-container .op:not(.post-media-expanded) .post-attachments:not(.post-attachments-multiple) > .post-attachment {
-  display: contents;
-}
-
-.threads-container .op:not(.post-media-expanded) .post-attachments:not(.post-attachments-multiple) .file-info {
-  margin: 5px 20px 3px;
-}
-
-.threads-container .op:not(.post-media-expanded) .post-attachments:not(.post-attachments-multiple) .image-box {
-  float: left;
-  margin: 5px 20px 10px;
-  max-width: calc(100% - 40px);
-}
-
-.threads-container .op:not(.post-media-expanded) .post-attachments:not(.post-attachments-multiple) .post-img {
-  /* A viewport bound lets the float measure the image without a percentage sizing cycle. */
-  max-width: min(220px, calc(100vw - 56px));
-}
-
-.threads-container .op .post-attachments-expanded {
-  float: none;
-  width: calc(100% - 40px);
-}
-
-.threads-container .post.reply {
-  margin: 0.2em 4px;
-  max-width: 94%;
-}
-
-/* Single reply attachments use their thumbnail width instead of a media column. */
-.threads-container .reply:not(.post-media-expanded) .post-body:has(> .post-attachments:not(.post-attachments-multiple)) {
-  display: block;
-}
-
-.threads-container .reply:not(.post-media-expanded) .post-attachments:not(.post-attachments-multiple),
-.threads-container .reply:not(.post-media-expanded) .post-attachments:not(.post-attachments-multiple) > .post-attachment {
-  display: contents;
-}
-
-.threads-container .reply:not(.post-media-expanded) .post-attachments:not(.post-attachments-multiple) .image-box {
-  float: left;
-  margin-right: 20px;
-}
-
-.threads-container .reply:not(.post-media-expanded) .post-attachments:not(.post-attachments-multiple) .post-img {
-  max-width: 150px;
-}
-
-.threads-container .post .expanded-image .post-img {
-  max-width: 100% !important;
-}
-
 @media (max-width: 768px) {
   body {
     padding: 0 4px 18px;
@@ -1077,10 +1054,6 @@ blockquote.comment {
   .threads-container > .thread {
     margin-left: 4px;
     margin-right: 4px;
-  }
-
-  .threads-container .op:not(.post-media-expanded) .post-attachments:not(.post-attachments-multiple) .post-img {
-    max-width: min(155px, calc(100vw - 56px));
   }
 
   header {
@@ -1110,13 +1083,12 @@ blockquote.comment {
     margin: 3px 0 0;
   }
 
-  .post-body {
-    gap: 8px;
-  }
-
   .post-attachments,
   .reply .post-attachments {
+    width: 140px;
     max-width: 42%;
+    margin-left: 0;
+    margin-right: 12px;
   }
 
   .post-attachment,
@@ -1134,7 +1106,7 @@ blockquote.comment {
   }
 
   .post-video {
-    max-height: 240px;
+    max-height: 70vh;
     max-width: 100%;
   }
 
@@ -1148,7 +1120,7 @@ blockquote.comment {
   }
 
   .reply {
-    max-width: calc(100vw - 38px);
+    max-width: calc(100% - 24px);
     min-width: 0;
   }
 
@@ -1176,42 +1148,6 @@ blockquote.comment {
   }
 }
 
-@media (max-width: 520px) {
-  /* A full-width header leaves room for controls on small screens. */
-  .op .post-body {
-    display: grid;
-    grid-template-columns: minmax(0, 38%) minmax(0, 1fr);
-    gap: 4px 8px;
-  }
-
-  .op .post-content {
-    display: contents;
-  }
-
-  .op .thread-header {
-    grid-column: 1 / -1;
-    grid-row: 1;
-  }
-
-  .op .post-attachments {
-    grid-column: 1;
-    grid-row: 2;
-    max-width: 100%;
-  }
-
-  .op .comment {
-    grid-column: 2;
-    grid-row: 2;
-  }
-
-  .op .post-body:not(.post-body-with-media) .comment,
-  .op.post-media-expanded .post-attachments,
-  .op.post-media-expanded .comment {
-    grid-column: 1 / -1;
-    grid-row: auto;
-  }
-}
-
 /* Functional additions inherit the original ChikoChan palette and spacing. */
 .postContainer,
 .op {
@@ -1227,6 +1163,7 @@ blockquote.comment {
 }
 
 .post-menu {
+  display: inline-block;
   flex: 0 0 auto;
   line-height: 1;
   position: relative;
@@ -1472,6 +1409,9 @@ blockquote.comment {
 
 .post .post-attachments-expanded,
 .post .post-attachment-expanded {
+  float: none;
+  margin-left: 0;
+  margin-right: 0;
   flex-basis: 100%;
   width: 100%;
   max-width: 100%;
@@ -2066,7 +2006,7 @@ blockquote.comment {
   }
 }
 
-/* Homepage and board-directory styles using the existing pink palette. */
+/* Homepage and board-directory styles using shared theme colors. */
 .site-home {
   padding: 0 5px 24px;
 }
@@ -2856,4 +2796,19 @@ body[data-board] > .announcement {
   #post-form textarea { max-width: 100%; box-sizing: border-box; }
   #post-form textarea { width: 100%; }
   #post-form .field-hint { overflow-wrap: anywhere; }
+}
+
+/* Inputs and verification stay inside the same compact table on all pages. */
+.post-form-table :is(input:not([type="submit"]):not([type="checkbox"]), textarea, select),
+.reply-form-table :is(input:not([type="submit"]):not([type="checkbox"]), textarea, select) {
+  max-width: 100%;
+}
+
+@media (max-width: 520px) {
+  .post-form-table .label,
+  .reply-form-table .label { width: 62px; }
+  .op .comment { margin-left: 10px; margin-right: 4px; }
+  .reply .comment { margin-left: 10px; margin-right: 4px; }
+  .date-time { white-space: normal; }
+  .nameBlock, .subject { overflow-wrap: anywhere; min-width: 0; }
 }

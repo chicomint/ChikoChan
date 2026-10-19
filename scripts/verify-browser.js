@@ -36,7 +36,7 @@ async function main() {
   const base = `http://127.0.0.1:${server.address().port}`;
   let browser;
   try {
-    browser = await chromium.launch({ headless: true });
+    browser = await chromium.launch({ headless: true, executablePath: process.env.PLAYWRIGHT_EXECUTABLE_PATH || undefined });
     for (const javaScriptEnabled of [false, true]) {
       const context = await browser.newContext({ javaScriptEnabled, viewport: { width: 1280, height: 900 } });
       // Provider integration is mocked; the real client script, fetch authorization,

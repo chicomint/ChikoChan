@@ -140,6 +140,7 @@
     preview.removeAttribute('id');
     preview.querySelectorAll('[id]').forEach(function (node) { node.removeAttribute('id'); });
     preview.querySelectorAll('form, .post-menu, .delete, .post-hide-button').forEach(function (node) { node.remove(); });
+    preview.querySelectorAll('.video-box').forEach(function (box) { collapseVideo(box); });
     preview.classList.add('quote-preview');
     document.body.appendChild(preview);
     var left = Math.min(event.clientX + 14, window.innerWidth - preview.offsetWidth - 8);
@@ -289,6 +290,36 @@
     }
   }
 
+  function updateExpandedMedia(attachments) {
+    if (!attachments) return;
+    var expanded = Boolean(attachments.querySelector('.expanded-image, .post-video'));
+    attachments.classList.toggle('post-attachments-expanded', expanded);
+    var post = attachments.closest('.post');
+    if (post) post.classList.toggle('post-media-expanded', expanded);
+  }
+
+  function collapseVideo(box) {
+    var video = box.querySelector('.post-video');
+    if (video) {
+      video.pause();
+      video.removeAttribute('src');
+      video.querySelectorAll('source').forEach(function (source) { source.remove(); });
+      video.load();
+      video.remove();
+    }
+    var attachment = box.closest('.post-attachment');
+    var collapse = attachment && attachment.querySelector('[data-collapse-video]');
+    if (collapse) collapse.remove();
+    var link = box.querySelector('.video-preview');
+    if (link) {
+      link.hidden = false;
+      link.setAttribute('aria-expanded', 'false');
+    }
+    box.classList.remove('video-revealed');
+    if (attachment) attachment.classList.remove('post-attachment-expanded');
+    updateExpandedMedia(box.closest('.post-attachments'));
+  }
+
   document.addEventListener('click', function (event) {
     var quoteLink = event.target.closest('[data-quote-id][data-thread-id]');
     if (quoteLink && quotePost(quoteLink.dataset.quoteId, quoteLink.dataset.threadId) === false) {
@@ -296,8 +327,62 @@
       return;
     }
 
+    var collapse = event.target.closest('[data-collapse-video]');
+    if (collapse) {
+      event.preventDefault();
+      var videoBox = collapse.closest('.post-attachment').querySelector('.video-box');
+      collapseVideo(videoBox);
+      videoBox.querySelector('.video-preview').focus();
+      return;
+    }
+
+    var videoLink = event.target.closest('.video-preview');
+    if (videoLink) {
+      if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+      event.preventDefault();
+      var videoBox = videoLink.closest('.video-box');
+      if (videoBox.classList.contains('spoiler-image') && !videoBox.classList.contains('spoiler-revealed')) {
+        videoBox.classList.add('spoiler-revealed');
+        var spoiler = videoBox.querySelector('[data-reveal-spoiler]');
+        if (spoiler) spoiler.remove();
+        return;
+      }
+      if (videoBox.querySelector('.post-video')) return;
+      var video = document.createElement('video');
+      video.className = 'post-video';
+      video.controls = true;
+      video.preload = 'none';
+      video.playsInline = true;
+      var poster = videoLink.querySelector('img');
+      if (poster) video.poster = poster.src;
+      var source = document.createElement('source');
+      source.src = videoLink.dataset.videoSrc;
+      source.type = videoLink.dataset.videoType;
+      video.appendChild(source);
+      var fallback = document.createElement('a');
+      fallback.href = videoLink.href;
+      fallback.textContent = 'Download video';
+      video.appendChild(fallback);
+      var fileInfo = videoBox.closest('.post-attachment').querySelector('.file-info');
+      var closeLink = document.createElement('a');
+      closeLink.href = '#' + fileInfo.id;
+      closeLink.dataset.collapseVideo = '';
+      closeLink.textContent = '[Close]';
+      closeLink.setAttribute('aria-label', 'Close video');
+      videoLink.hidden = true;
+      videoLink.setAttribute('aria-expanded', 'true');
+      videoBox.appendChild(video);
+      fileInfo.appendChild(closeLink);
+      videoBox.classList.add('video-revealed');
+      videoBox.closest('.post-attachment').classList.add('post-attachment-expanded');
+      updateExpandedMedia(videoBox.closest('.post-attachments'));
+      closeLink.focus();
+      return;
+    }
+
     var imageLink = event.target.closest('.fileThumb');
     if (imageLink) {
+      if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
       var box = imageLink.closest('.image-box');
       if (box && box.classList.contains('spoiler-image') && !box.classList.contains('spoiler-revealed')) {
         event.preventDefault();
@@ -310,12 +395,7 @@
       var attachment = imageLink.closest('.post-attachment');
       if (attachment) attachment.classList.toggle('post-attachment-expanded', expanded);
       var attachments = imageLink.closest('.post-attachments');
-      if (attachments) {
-        var hasExpandedMedia = Boolean(attachments.querySelector('.expanded-image'));
-        attachments.classList.toggle('post-attachments-expanded', hasExpandedMedia);
-        var post = attachments.closest('.post');
-        if (post) post.classList.toggle('post-media-expanded', hasExpandedMedia);
-      }
+      updateExpandedMedia(attachments);
       var image = imageLink.querySelector('[data-expand-image]');
       if (image) image.src = expanded ? image.dataset.fullSrc : image.dataset.thumbnailSrc;
       return;

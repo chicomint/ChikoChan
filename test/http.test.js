@@ -1108,8 +1108,10 @@ test('posts, serves, renders, and deletes validated WebM and MP4 video assets', 
   assert.equal(fs.existsSync(path.join(server.directory, asset.thumbnail)), true);
 
   const html = await fetch(`${server.url}/chiko/thread/${created.threadId}`).then(result => result.text());
-  assert.match(html, /<video class="post-video" controls preload="metadata" playsinline poster="\/src\/thumb-[^"]+\.jpg"/);
-  assert.match(html, /<source src="\/src\/[^"]+\.webm" type="video\/webm">/);
+  assert.doesNotMatch(html, /<video\b|<source\b/);
+  assert.match(html, /class="video-preview"[^>]+data-video-src="\/src\/[^"]+\.webm" data-video-type="video\/webm"/);
+  assert.match(html, /class="post-img" src="\/src\/thumb-[^"]+\.jpg" alt="Video preview"[^>]+loading="lazy"/);
+  assert.match(html, /, WEBM\)/);
   assert.match(html, /data-reveal-spoiler/);
   assert.match(html, /class="file-download"/);
 
@@ -1155,7 +1157,8 @@ test('posts, serves, renders, and deletes validated WebM and MP4 video assets', 
     assert.equal(mp4Asset.mime, 'video/mp4');
     assert.equal(mp4Asset.videoCodec, 'h264');
     const mp4Html = await fetch(`${server.url}/chiko/thread/${mp4Post.id}`).then(result => result.text());
-    assert.match(mp4Html, /<source src="\/src\/[^"]+\.mp4" type="video\/mp4">/);
+    assert.doesNotMatch(mp4Html, /<video\b|<source\b/);
+    assert.match(mp4Html, /data-video-src="\/src\/[^"]+\.mp4" data-video-type="video\/mp4"/);
     const mp4OriginalPath = path.join(server.directory, mp4Asset.path);
     const mp4ThumbnailPath = path.join(server.directory, mp4Asset.thumbnail);
     const mp4Deletion = await fetch(`${server.url}/delete?json=1`, {

@@ -1,4 +1,9 @@
+# What happened recently? - 10/28/26
+We recently moved to Lychan and tried editing the code to make it look like ChikoChan, but ended up with a lot of issues and it's pretty hard for us to fix.
 
+So we decided to rollback to our own ChikoChan software since we know how everything works there and it's much easier for us to maintain.
+
+Sorry for changing stuff again lol.
 #Fixed ui again also videos now show previews -10/19/2026
 #FIXED UI AGAIN!!!! - 10/2/26
 #fixed ui - 9/30/26

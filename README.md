@@ -1,8 +1,3 @@
-<h1>Discontinued....</h1>
- ChikoChan has officially migrated to a new engine built with custom code and a fork of Lychan.<br>
-This repository contains the old legacy imageboard engine that originally served as the foundation for ChikoChan.
- 
-
 # <img src="chikki.ico" width="40" alt=""> ChikoChan
 
 ![ChikoChan board](Image/owwww.png)

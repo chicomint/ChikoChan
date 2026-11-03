@@ -54,7 +54,7 @@ test('blocking hooks may reject but infrastructure failures become bounded servi
     () => timedOut.runBlocking('beforeUpload', {}),
     error => error.status === 503 && /safety extension/.test(error.message)
   );
-  assert.match(logged, /timed out/);
+  assert.match(logged, /failed/);
 });
 
 test('observational hook failures are isolated from completed application actions', async () => {

@@ -3,6 +3,7 @@
 const express = require('express');
 const crypto = require('node:crypto');
 const { AsyncLocalStorage } = require('node:async_hooks');
+const { installPreferences } = require('./lib/preferences');
 const { NativeCaptcha } = require('./lib/native-captcha');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -115,6 +116,7 @@ function createApp(overrides = {}) {
     : '';
 
   app.disable('x-powered-by');
+  app.set('env', config.deployment.environment);
   if (config.trustProxy) app.set('trust proxy', config.trustProxy);
 
   app.use((request, response, next) => {
@@ -283,12 +285,8 @@ function createApp(overrides = {}) {
   });
 
   app.use(async (request, response, next) => {
-    try {
-      await store.ready;
-      next();
-    } catch (error) {
-      next(error);
-    }
+    await store.ready;
+    next();
   });
 
   app.get('/readyz', async (request, response) => {
@@ -304,7 +302,7 @@ function createApp(overrides = {}) {
       if (postingAuthorization.enabled) await authorizationNonceStore.healthCheck();
       response.json({ status: 'ready' });
     } catch (error) {
-      console.error(`Readiness check failed: ${error.message}`);
+      (overrides.logger || console).error('Readiness check failed. Check database and media storage access.');
       response.status(503).json({ status: 'not-ready' });
     }
   });
@@ -401,6 +399,8 @@ function createApp(overrides = {}) {
     });
   }
 
+  installPreferences(app, config, store, { keyFile: overrides.keyFile, limit: rateLimit('apiMutation') });
+
   app.get('/robots.txt', (request, response) => response.type('text/plain').send('User-agent: *\nDisallow: /admin\n'));
 
   function abuseIdentity(request, purpose) {
@@ -428,12 +428,33 @@ function createApp(overrides = {}) {
     return rateLimit(operation, 'Too many posts from this address. Wait a moment and try again.')(request, response, next);
   }
 
-  app.get('/posting-authorizations/new', async (request, response, next) => {
-    try {
+  app.get('/posting-authorizations/new', async (request, response) => {
+    if (!postingAuthorization.enabled) throw httpError(404, 'Not found.');
+    const board = await service.publicBoard(request.query.board);
+    if (!board || !board.enabled) throw httpError(404, 'Board not found.');
+    const threadId = optionalPositiveInteger(request.query.threadId === '0' ? undefined : request.query.threadId) || 0;
+    if (!Number.isSafeInteger(threadId) || threadId < 0) throw httpError(400, 'Invalid thread.');
+    if (threadId) {
+      const thread = (await service.publicThread(threadId, board.id))?.thread;
+      if (!thread || thread.boardId !== board.id || thread.locked || thread.archived) {
+        throw httpError(404, 'Thread not found.');
+      }
+    }
+    const returnTo = safeRedirect(request.query.returnTo, threadId
+      ? `${renderer.threadPath(board, threadId)}#reply-form-${threadId}`
+      : `${renderer.boardPath(board)}#post-form`);
+    response.setHeader('Cache-Control', 'no-store');
+    response.send(renderer.postingAuthorizationPage(board, threadId, returnTo));
+  });
+
+  app.post(
+    '/posting-authorizations',
+    rateLimit('captchaAuthorization', 'Too many posting authorization attempts. Try again later.'),
+    async (request, response) => {
       if (!postingAuthorization.enabled) throw httpError(404, 'Not found.');
-      const board = await service.publicBoard(request.query.board);
+      const board = await service.publicBoard(request.body.board);
       if (!board || !board.enabled) throw httpError(404, 'Board not found.');
-      const threadId = optionalPositiveInteger(request.query.threadId === '0' ? undefined : request.query.threadId) || 0;
+      const threadId = optionalPositiveInteger(request.body.threadId === '0' ? undefined : request.body.threadId) || 0;
       if (!Number.isSafeInteger(threadId) || threadId < 0) throw httpError(400, 'Invalid thread.');
       if (threadId) {
         const thread = (await service.publicThread(threadId, board.id))?.thread;
@@ -441,56 +462,27 @@ function createApp(overrides = {}) {
           throw httpError(404, 'Thread not found.');
         }
       }
-      const returnTo = safeRedirect(request.query.returnTo, threadId
-        ? `${renderer.threadPath(board, threadId)}#reply-form-${threadId}`
-        : `${renderer.boardPath(board)}#post-form`);
-      response.setHeader('Cache-Control', 'no-store');
-      response.send(renderer.postingAuthorizationPage(board, threadId, returnTo));
-    } catch (error) {
-      next(error);
-    }
-  });
-
-  app.post(
-    '/posting-authorizations',
-    rateLimit('captchaAuthorization', 'Too many posting authorization attempts. Try again later.'),
-    async (request, response, next) => {
-      try {
-        if (!postingAuthorization.enabled) throw httpError(404, 'Not found.');
-        const board = await service.publicBoard(request.body.board);
-        if (!board || !board.enabled) throw httpError(404, 'Board not found.');
-        const threadId = optionalPositiveInteger(request.body.threadId === '0' ? undefined : request.body.threadId) || 0;
-        if (!Number.isSafeInteger(threadId) || threadId < 0) throw httpError(400, 'Invalid thread.');
-        if (threadId) {
-          const thread = (await service.publicThread(threadId, board.id))?.thread;
-          if (!thread || thread.boardId !== board.id || thread.locked || thread.archived) {
-            throw httpError(404, 'Thread not found.');
-          }
-        }
-        if (request.query.nativeChallenge && request.body.nativeAnswer) {
-          const challenge = await nativeCaptcha.consume(request, {
-            board: board.uri, thread: threadId, addressKey: abuseIdentity(request, 'native-captcha')
-          });
-          nativeCaptcha.verify(challenge, request.body.nativeAnswer);
-        } else await antiAbuse.verify(request.body['cf-turnstile-response']);
-        const authorization = await postingAuthorization.issue({
-          boardUri: board.uri,
-          threadId,
-          addressKey: abuseIdentity(request, 'posting-authorization')
+      if (request.query.nativeChallenge && request.body.nativeAnswer) {
+        const challenge = await nativeCaptcha.consume(request, {
+          board: board.uri, thread: threadId, addressKey: abuseIdentity(request, 'native-captcha')
         });
-        postingAuthorization.setCookie(request, response, authorization.token);
-        response.setHeader('Cache-Control', 'no-store');
-        if (isJsonRequest(request)) {
-          response.status(201).json({
-            ok: true,
-            token: authorization.token,
-            expiresAt: authorization.expiresAt
-          });
-        } else {
-          response.redirect(303, safeRedirect(request.body.returnTo, `/${board.uri}/`));
-        }
-      } catch (error) {
-        next(error);
+        nativeCaptcha.verify(challenge, request.body.nativeAnswer);
+      } else await antiAbuse.verify(request.body['cf-turnstile-response']);
+      const authorization = await postingAuthorization.issue({
+        boardUri: board.uri,
+        threadId,
+        addressKey: abuseIdentity(request, 'posting-authorization')
+      });
+      postingAuthorization.setCookie(request, response, authorization.token);
+      response.setHeader('Cache-Control', 'no-store');
+      if (isJsonRequest(request)) {
+        response.status(201).json({
+          ok: true,
+          token: authorization.token,
+          expiresAt: authorization.expiresAt
+        });
+      } else {
+        response.redirect(303, safeRedirect(request.body.returnTo, `/${board.uri}/`));
       }
     }
   );
@@ -515,23 +507,19 @@ function createApp(overrides = {}) {
       next();
       return;
     }
-    try {
-      const boardUri = String(request.params.boardUri || request.query.board || '').toLowerCase();
-      const rawThreadId = String(request.query.threadId || '0');
-      if (!/^\d+$/.test(rawThreadId)) throw httpError(403, 'Posting authorization is required.');
-      const threadId = Number(rawThreadId);
-      const authorization = await postingAuthorization.consume(request, {
-        boardUri,
-        threadId,
-        addressKey: abuseIdentity(request, 'posting-authorization')
-      });
-      postingAuthorization.clearCookie(request, response);
-      if (!authorization) throw httpError(403, 'Posting authorization is invalid, expired, or already used.');
-      request.postAuthorization = authorization;
-      next();
-    } catch (error) {
-      next(error);
-    }
+    const boardUri = String(request.params.boardUri || request.query.board || '').toLowerCase();
+    const rawThreadId = String(request.query.threadId || '0');
+    if (!/^\d+$/.test(rawThreadId)) throw httpError(403, 'Posting authorization is required.');
+    const threadId = Number(rawThreadId);
+    const authorization = await postingAuthorization.consume(request, {
+      boardUri,
+      threadId,
+      addressKey: abuseIdentity(request, 'posting-authorization')
+    });
+    postingAuthorization.clearCookie(request, response);
+    if (!authorization) throw httpError(403, 'Posting authorization is invalid, expired, or already used.');
+    request.postAuthorization = authorization;
+    next();
   }
 
   function postHandler(forceReply = false, staffOnly = false) {
@@ -671,14 +659,10 @@ function createApp(overrides = {}) {
   app.post(['/post', '/post.php'], postRateLimit, requirePostingAuthorization, uploads.middleware, postHandler(false));
   app.post('/reply', postRateLimit, requirePostingAuthorization, uploads.middleware, postHandler(true));
 
-  app.post('/delete', rateLimit('deletePassword', 'Too many deletion attempts. Try again later.'), async (request, response, next) => {
-    try {
-      const result = await service.deleteByPassword(request.body.postIds, request.body.password || request.body.pwd, Boolean(request.body.fileOnly));
-      if (isJsonRequest(request)) response.json({ ok: true, ...result });
-      else response.redirect(303, safeRedirect(request.body.redirectTo, '/'));
-    } catch (error) {
-      next(error);
-    }
+  app.post('/delete', rateLimit('deletePassword', 'Too many deletion attempts. Try again later.'), async (request, response) => {
+    const result = await service.deleteByPassword(request.body.postIds, request.body.password || request.body.pwd, Boolean(request.body.fileOnly));
+    if (isJsonRequest(request)) response.json({ ok: true, ...result });
+    else response.redirect(303, safeRedirect(request.body.redirectTo, '/'));
   });
 
   app.get('/report/success', (request, response) => {
@@ -686,48 +670,36 @@ function createApp(overrides = {}) {
       service.getSiteStats(), safeRedirect(request.query.returnTo, '/')));
   });
 
-  app.post('/report', rateLimit('reportCreate', 'Too many reports from this address. Try again later.'), async (request, response, next) => {
-    try {
-      const report = await service.reportPost(request.body.postId, request.body.reason, {
-        category: request.body.category,
-        clientKey: abuseIdentity(request, 'reporter')
-      });
-      hooks.notify('reportCreated', {
-        reportId: report.id,
-        boardId: report.boardId,
-        threadId: report.threadId,
-        postId: report.postId,
-        category: report.category,
-        reason: report.reason
-      });
-      if (isJsonRequest(request)) response.status(201).json({ ok: true, reportId: report.id });
-      else {
-        const destination = safeRedirect(request.body.redirectTo, '/');
-        response.redirect(303, `/report/success?returnTo=${encodeURIComponent(destination)}`);
-      }
-    } catch (error) {
-      next(error);
+  app.post('/report', rateLimit('reportCreate', 'Too many reports from this address. Try again later.'), async (request, response) => {
+    const report = await service.reportPost(request.body.postId, request.body.reason, {
+      category: request.body.category,
+      clientKey: abuseIdentity(request, 'reporter')
+    });
+    hooks.notify('reportCreated', {
+      reportId: report.id,
+      boardId: report.boardId,
+      threadId: report.threadId,
+      postId: report.postId,
+      category: report.category,
+      reason: report.reason
+    });
+    if (isJsonRequest(request)) response.status(201).json({ ok: true, reportId: report.id });
+    else {
+      const destination = safeRedirect(request.body.redirectTo, '/');
+      response.redirect(303, `/report/success?returnTo=${encodeURIComponent(destination)}`);
     }
   });
 
-  app.get('/appeals/:appealId', (request, response, next) => {
-    try {
-      const context = service.getAppealContext(request.params.appealId);
-      if (!context) throw httpError(404, 'Appeal link not found.');
-      response.setHeader('Cache-Control', 'no-store');
-      response.send(renderer.appeal(context));
-    } catch (error) {
-      next(error);
-    }
+  app.get('/appeals/:appealId', (request, response) => {
+    const context = service.getAppealContext(request.params.appealId);
+    if (!context) throw httpError(404, 'Appeal link not found.');
+    response.setHeader('Cache-Control', 'no-store');
+    response.send(renderer.appeal(context));
   });
 
-  app.post('/appeals/:appealId', rateLimit('reportCreate', 'Too many appeal attempts. Try again later.'), async (request, response, next) => {
-    try {
-      await service.submitAppeal(request.params.appealId, request.body.message);
-      response.redirect(303, `/appeals/${encodeURIComponent(request.params.appealId)}`);
-    } catch (error) {
-      next(error);
-    }
+  app.post('/appeals/:appealId', rateLimit('reportCreate', 'Too many appeal attempts. Try again later.'), async (request, response) => {
+    await service.submitAppeal(request.params.appealId, request.body.message);
+    response.redirect(303, `/appeals/${encodeURIComponent(request.params.appealId)}`);
   });
 
   async function requireAdmin(request, response, next) {
@@ -794,31 +766,27 @@ function createApp(overrides = {}) {
     response.send(renderer.adminLogin());
   });
 
-  app.post('/admin/login', async (request, response, next) => {
-    try {
-      if (!admin.configured) throw httpError(404, 'Not found.');
-      await rateLimiter.consume(
-        'adminLogin',
-        abuseIdentity(request, 'rate:adminLogin'),
-        'Too many login attempts. Try again later.'
-      );
-      const username = String(request.body.username || '').trim();
-      const account = username
-        ? await service.authenticateStaff(username, request.body.password, request.body.mfaCode)
-        : null;
-      const legacyLogin = !username && admin.verifyPassword(request.body.password);
-      if (!account && !legacyLogin) {
-        response.status(401).send(renderer.adminLogin('Wrong username, password, or authentication code.'));
-        return;
-      }
-      admin.setCookie(request, response, admin.createToken(account ? {
-        accountId: account.id,
-        sessionVersion: account.sessionVersion
-      } : {}));
-      response.redirect(303, '/admin');
-    } catch (error) {
-      next(error);
+  app.post('/admin/login', async (request, response) => {
+    if (!admin.configured) throw httpError(404, 'Not found.');
+    await rateLimiter.consume(
+      'adminLogin',
+      abuseIdentity(request, 'rate:adminLogin'),
+      'Too many login attempts. Try again later.'
+    );
+    const username = String(request.body.username || '').trim();
+    const account = username
+      ? await service.authenticateStaff(username, request.body.password, request.body.mfaCode)
+      : null;
+    const legacyLogin = !username && admin.verifyPassword(request.body.password);
+    if (!account && !legacyLogin) {
+      response.status(401).send(renderer.adminLogin('Wrong username, password, or authentication code.'));
+      return;
     }
+    admin.setCookie(request, response, admin.createToken(account ? {
+      accountId: account.id,
+      sessionVersion: account.sessionVersion
+    } : {}));
+    response.redirect(303, '/admin');
   });
 
   app.get('/admin', requireAdmin, (request, response) => {
@@ -966,550 +934,402 @@ function createApp(overrides = {}) {
     response.send(renderer.adminBoardSettings(board, admin.csrf(request.adminSession)));
   });
 
-  app.post('/admin/logout', requireAdmin, (request, response, next) => {
-    try {
-      requireCsrf(request);
-      admin.clearCookie(request, response);
-      response.redirect(303, '/admin/login');
-    } catch (error) {
-      next(error);
-    }
+  app.post('/admin/logout', requireAdmin, (request, response) => {
+    requireCsrf(request);
+    admin.clearCookie(request, response);
+    response.redirect(303, '/admin/login');
   });
 
-  app.post('/admin/delete', requireAdmin, async (request, response, next) => {
-    try {
-      requireCsrf(request);
-      const target = targetForPost(request.body.postId);
-      requirePermission(request, 'posts.delete', target.thread.boardId);
-      await service.adminDelete(request.body.postId, {
-        actor: request.staff,
-        fileOnly: String(request.body.fileOnly || '') === '1',
-        attachmentId: request.body.attachmentId,
-        reason: request.body.reason
-      });
-      response.redirect(303, '/admin');
-    } catch (error) {
-      next(error);
-    }
+  app.post('/admin/delete', requireAdmin, async (request, response) => {
+    requireCsrf(request);
+    const target = targetForPost(request.body.postId);
+    requirePermission(request, 'posts.delete', target.thread.boardId);
+    await service.adminDelete(request.body.postId, {
+      actor: request.staff,
+      fileOnly: String(request.body.fileOnly || '') === '1',
+      attachmentId: request.body.attachmentId,
+      reason: request.body.reason
+    });
+    response.redirect(303, '/admin');
   });
 
-  app.post('/admin/trash/restore', requireAdmin, async (request, response, next) => {
-    try {
-      requireCsrf(request);
-      requirePermission(request, 'posts.delete');
-      await service.restoreTrash(request.body.trashId, { actor: request.staff });
-      response.redirect(303, '/admin/trash');
-    } catch (error) {
-      next(error);
-    }
+  app.post('/admin/trash/restore', requireAdmin, async (request, response) => {
+    requireCsrf(request);
+    requirePermission(request, 'posts.delete');
+    await service.restoreTrash(request.body.trashId, { actor: request.staff });
+    response.redirect(303, '/admin/trash');
   });
 
-  app.post('/admin/trash/purge', requireAdmin, async (request, response, next) => {
-    try {
-      requireCsrf(request);
-      requirePermission(request, 'posts.delete');
-      await service.purgeExpiredTrash({ actor: request.staff });
-      response.redirect(303, '/admin/trash');
-    } catch (error) {
-      next(error);
-    }
+  app.post('/admin/trash/purge', requireAdmin, async (request, response) => {
+    requireCsrf(request);
+    requirePermission(request, 'posts.delete');
+    await service.purgeExpiredTrash({ actor: request.staff });
+    response.redirect(303, '/admin/trash');
   });
 
-  app.post('/admin/customization', requireAdmin, async (request, response, next) => {
-    try {
-      requireCsrf(request);
-      requirePermission(request, 'site.manage');
-      const theme = Object.fromEntries(Object.entries(request.body)
-        .filter(([key]) => key.startsWith('theme_'))
-        .map(([key, value]) => [key.slice(6), value]));
-      await service.updateCustomization({ ...request.body, theme }, { actor: request.staff });
-      response.redirect(303, '/admin/customization');
-    } catch (error) {
-      next(error);
-    }
+  app.post('/admin/customization', requireAdmin, async (request, response) => {
+    requireCsrf(request);
+    requirePermission(request, 'site.manage');
+    const theme = Object.fromEntries(Object.entries(request.body)
+      .filter(([key]) => key.startsWith('theme_'))
+      .map(([key, value]) => [key.slice(6), value]));
+    await service.updateCustomization({ ...request.body, theme }, { actor: request.staff });
+    response.redirect(303, '/admin/customization');
   });
 
-  app.post('/admin/customization/pages/add', requireAdmin, async (request, response, next) => {
-    try {
-      requireCsrf(request);
-      requirePermission(request, 'site.manage');
-      await service.addCustomPage(request.body, { actor: request.staff });
-      response.redirect(303, '/admin/customization');
-    } catch (error) {
-      next(error);
-    }
+  app.post('/admin/customization/pages/add', requireAdmin, async (request, response) => {
+    requireCsrf(request);
+    requirePermission(request, 'site.manage');
+    await service.addCustomPage(request.body, { actor: request.staff });
+    response.redirect(303, '/admin/customization');
   });
 
-  app.post('/admin/customization/pages/edit', requireAdmin, async (request, response, next) => {
-    try {
-      requireCsrf(request);
-      requirePermission(request, 'site.manage');
-      await service.updateCustomPage(request.body.pageId, request.body, { actor: request.staff });
-      response.redirect(303, '/admin/customization');
-    } catch (error) {
-      next(error);
-    }
+  app.post('/admin/customization/pages/edit', requireAdmin, async (request, response) => {
+    requireCsrf(request);
+    requirePermission(request, 'site.manage');
+    await service.updateCustomPage(request.body.pageId, request.body, { actor: request.staff });
+    response.redirect(303, '/admin/customization');
   });
 
-  app.post('/admin/customization/pages/delete', requireAdmin, async (request, response, next) => {
-    try {
-      requireCsrf(request);
-      requirePermission(request, 'site.manage');
-      await service.deleteCustomPage(request.body.pageId, { actor: request.staff });
-      response.redirect(303, '/admin/customization');
-    } catch (error) {
-      next(error);
-    }
+  app.post('/admin/customization/pages/delete', requireAdmin, async (request, response) => {
+    requireCsrf(request);
+    requirePermission(request, 'site.manage');
+    await service.deleteCustomPage(request.body.pageId, { actor: request.staff });
+    response.redirect(303, '/admin/customization');
   });
 
-  app.post('/admin/edit', requireAdmin, async (request, response, next) => {
-    try {
-      requireCsrf(request);
-      const target = targetForPost(request.body.postId);
-      requirePermission(request, 'posts.edit', target.thread.boardId);
-      const result = await service.editPost(request.body.postId, {
-        title: request.body.title,
-        comment: request.body.comment,
-        reason: request.body.reason
-      }, { actor: request.staff });
-      response.redirect(303, `${renderer.threadPath(service.getBoardById(target.thread.boardId), result.threadId)}#p${result.postId}`);
-    } catch (error) {
-      next(error);
-    }
+  app.post('/admin/edit', requireAdmin, async (request, response) => {
+    requireCsrf(request);
+    const target = targetForPost(request.body.postId);
+    requirePermission(request, 'posts.edit', target.thread.boardId);
+    const result = await service.editPost(request.body.postId, {
+      title: request.body.title,
+      comment: request.body.comment,
+      reason: request.body.reason
+    }, { actor: request.staff });
+    response.redirect(303, `${renderer.threadPath(service.getBoardById(target.thread.boardId), result.threadId)}#p${result.postId}`);
   });
 
-  app.post('/admin/thread-setting', requireAdmin, async (request, response, next) => {
-    try {
-      requireCsrf(request);
-      const thread = service.getThread(request.body.threadId);
-      if (!thread) throw httpError(404, 'Thread not found.');
-      requirePermission(request, 'threads.manage', thread.boardId);
-      await service.setThreadFlag(
-        request.body.threadId,
-        request.body.flag,
-        request.body.value === '1',
-        { actor: request.staff }
-      );
-      response.redirect(303, '/admin');
-    } catch (error) {
-      next(error);
-    }
+  app.post('/admin/thread-setting', requireAdmin, async (request, response) => {
+    requireCsrf(request);
+    const thread = service.getThread(request.body.threadId);
+    if (!thread) throw httpError(404, 'Thread not found.');
+    requirePermission(request, 'threads.manage', thread.boardId);
+    await service.setThreadFlag(
+      request.body.threadId,
+      request.body.flag,
+      request.body.value === '1',
+      { actor: request.staff }
+    );
+    response.redirect(303, '/admin');
   });
 
-  app.post('/admin/dismiss-report', requireAdmin, async (request, response, next) => {
-    try {
-      requireCsrf(request);
-      requirePermission(request, 'reports.manage');
-      await service.dismissReport(request.body.reportId, staffActionContext(request));
-      response.redirect(303, '/admin');
-    } catch (error) {
-      next(error);
-    }
+  app.post('/admin/dismiss-report', requireAdmin, async (request, response) => {
+    requireCsrf(request);
+    requirePermission(request, 'reports.manage');
+    await service.dismissReport(request.body.reportId, staffActionContext(request));
+    response.redirect(303, '/admin');
   });
 
-  app.post('/admin/reports/resolve', requireAdmin, async (request, response, next) => {
-    try {
-      requireCsrf(request);
-      requirePermission(request, 'reports.manage');
-      await service.resolveReport(
-        request.body.reportId,
-        request.body.resolution,
-        request.body.note,
-        staffActionContext(request)
-      );
-      response.redirect(303, '/admin/reports');
-    } catch (error) {
-      next(error);
-    }
+  app.post('/admin/reports/resolve', requireAdmin, async (request, response) => {
+    requireCsrf(request);
+    requirePermission(request, 'reports.manage');
+    await service.resolveReport(
+      request.body.reportId,
+      request.body.resolution,
+      request.body.note,
+      staffActionContext(request)
+    );
+    response.redirect(303, '/admin/reports');
   });
 
-  app.post('/admin/reports/reopen', requireAdmin, async (request, response, next) => {
-    try {
-      requireCsrf(request);
-      requirePermission(request, 'reports.manage');
-      await service.reopenReport(request.body.reportId, staffActionContext(request));
-      response.redirect(303, '/admin/reports?status=closed');
-    } catch (error) {
-      next(error);
-    }
+  app.post('/admin/reports/reopen', requireAdmin, async (request, response) => {
+    requireCsrf(request);
+    requirePermission(request, 'reports.manage');
+    await service.reopenReport(request.body.reportId, staffActionContext(request));
+    response.redirect(303, '/admin/reports?status=closed');
   });
 
-  app.post('/admin/ban', requireAdmin, async (request, response, next) => {
-    try {
-      requireCsrf(request);
-      const allowedDurations = new Set([0, 3600000, 86400000, 604800000]);
-      const duration = Number(request.body.duration);
-      if (!allowedDurations.has(duration)) throw httpError(400, 'Invalid ban duration.');
-      const target = targetForPost(request.body.postId);
-      requirePermission(request, 'bans.manage', target.thread.boardId);
-      await service.banPost(request.body.postId, duration, request.body.reason, { actor: request.staff });
-      response.redirect(303, '/admin');
-    } catch (error) {
-      next(error);
-    }
+  app.post('/admin/ban', requireAdmin, async (request, response) => {
+    requireCsrf(request);
+    const allowedDurations = new Set([0, 3600000, 86400000, 604800000]);
+    const duration = Number(request.body.duration);
+    if (!allowedDurations.has(duration)) throw httpError(400, 'Invalid ban duration.');
+    const target = targetForPost(request.body.postId);
+    requirePermission(request, 'bans.manage', target.thread.boardId);
+    await service.banPost(request.body.postId, duration, request.body.reason, { actor: request.staff });
+    response.redirect(303, '/admin');
   });
 
-  app.post('/admin/sanction', requireAdmin, async (request, response, next) => {
-    try {
-      requireCsrf(request);
-      const allowedDurations = new Set([0, 3600000, 86400000, 604800000]);
-      const duration = Number(request.body.duration);
-      if (!allowedDurations.has(duration)) throw httpError(400, 'Invalid sanction duration.');
-      const target = targetForPost(request.body.postId);
-      requirePermission(request, 'bans.manage', target.thread.boardId);
-      const visibleValues = Array.isArray(request.body.reasonVisible)
-        ? request.body.reasonVisible
-        : [request.body.reasonVisible];
-      await service.sanctionPost(request.body.postId, {
-        kind: request.body.kind,
-        target: request.body.target,
-        scope: request.body.scope,
-        fileHash: request.body.fileHash,
-        durationMs: duration,
-        reason: request.body.reason,
-        reasonVisible: visibleValues.includes('1'),
-        moderatorNote: request.body.moderatorNote
-      }, { actor: request.staff });
-      response.redirect(303, '/admin');
-    } catch (error) {
-      next(error);
-    }
+  app.post('/admin/sanction', requireAdmin, async (request, response) => {
+    requireCsrf(request);
+    const allowedDurations = new Set([0, 3600000, 86400000, 604800000]);
+    const duration = Number(request.body.duration);
+    if (!allowedDurations.has(duration)) throw httpError(400, 'Invalid sanction duration.');
+    const target = targetForPost(request.body.postId);
+    requirePermission(request, 'bans.manage', target.thread.boardId);
+    const visibleValues = Array.isArray(request.body.reasonVisible)
+      ? request.body.reasonVisible
+      : [request.body.reasonVisible];
+    await service.sanctionPost(request.body.postId, {
+      kind: request.body.kind,
+      target: request.body.target,
+      scope: request.body.scope,
+      fileHash: request.body.fileHash,
+      durationMs: duration,
+      reason: request.body.reason,
+      reasonVisible: visibleValues.includes('1'),
+      moderatorNote: request.body.moderatorNote
+    }, { actor: request.staff });
+    response.redirect(303, '/admin');
   });
 
-  app.post('/admin/unban', requireAdmin, async (request, response, next) => {
-    try {
-      requireCsrf(request);
-      const data = service.getData();
-      const ban = data.bans.find(item => item.id === request.body.banId);
-      if (!ban) throw httpError(404, 'Ban not found.');
-      requirePermission(request, 'bans.manage', ban.boardId || '');
-      await service.unban(request.body.banId, { actor: request.staff });
-      response.redirect(303, '/admin');
-    } catch (error) {
-      next(error);
-    }
+  app.post('/admin/unban', requireAdmin, async (request, response) => {
+    requireCsrf(request);
+    const data = service.getData();
+    const ban = data.bans.find(item => item.id === request.body.banId);
+    if (!ban) throw httpError(404, 'Ban not found.');
+    requirePermission(request, 'bans.manage', ban.boardId || '');
+    await service.unban(request.body.banId, { actor: request.staff });
+    response.redirect(303, '/admin');
   });
 
-  app.post('/admin/media/hash-ban', requireAdmin, async (request, response, next) => {
-    try {
-      requireCsrf(request);
-      requirePermission(
-        request,
-        'bans.manage',
-        request.body.scope === 'board' ? String(request.body.boardId || '') : ''
-      );
-      await service.createMediaHashBan(request.body, { actor: request.staff });
-      response.redirect(303, '/admin/media');
-    } catch (error) {
-      next(error);
-    }
+  app.post('/admin/media/hash-ban', requireAdmin, async (request, response) => {
+    requireCsrf(request);
+    requirePermission(
+      request,
+      'bans.manage',
+      request.body.scope === 'board' ? String(request.body.boardId || '') : ''
+    );
+    await service.createMediaHashBan(request.body, { actor: request.staff });
+    response.redirect(303, '/admin/media');
   });
 
-  app.post('/admin/media/hash-unban', requireAdmin, async (request, response, next) => {
-    try {
-      requireCsrf(request);
-      requirePermission(request, 'bans.manage');
-      await service.liftMediaHashBan(request.body.hashBanId, { actor: request.staff });
-      response.redirect(303, '/admin/media');
-    } catch (error) {
-      next(error);
-    }
+  app.post('/admin/media/hash-unban', requireAdmin, async (request, response) => {
+    requireCsrf(request);
+    requirePermission(request, 'bans.manage');
+    await service.liftMediaHashBan(request.body.hashBanId, { actor: request.staff });
+    response.redirect(303, '/admin/media');
   });
 
-  app.post('/admin/appeals/resolve', requireAdmin, async (request, response, next) => {
-    try {
-      requireCsrf(request);
-      requirePermission(request, 'reports.manage');
-      await service.resolveAppeal(
-        request.body.appealId,
-        request.body.decision,
-        request.body.note,
-        { actor: request.staff }
-      );
-      response.redirect(303, '/admin/appeals');
-    } catch (error) {
-      next(error);
-    }
+  app.post('/admin/appeals/resolve', requireAdmin, async (request, response) => {
+    requireCsrf(request);
+    requirePermission(request, 'reports.manage');
+    await service.resolveAppeal(
+      request.body.appealId,
+      request.body.decision,
+      request.body.note,
+      { actor: request.staff }
+    );
+    response.redirect(303, '/admin/appeals');
   });
 
   app.post(
     '/admin/boards/add',
     requireAdmin,
     staffRateLimit('boardCreate', 'Too many board creation attempts. Try again later.'),
-    async (request, response, next) => {
-    try {
-      requireCsrf(request);
-      requirePermission(request, 'boards.manage');
-      await service.addBoard(request.body, { actor: request.staff });
-      response.redirect(303, '/admin/boards');
-    } catch (error) {
-      next(error);
-    }
+    async (request, response) => {
+    requireCsrf(request);
+    requirePermission(request, 'boards.manage');
+    await service.addBoard(request.body, { actor: request.staff });
+    response.redirect(303, '/admin/boards');
     }
   );
 
-  app.post('/admin/boards/edit', requireAdmin, async (request, response, next) => {
-    try {
-      requireCsrf(request);
-      requirePermission(request, 'boards.manage');
-      const changes = {
-        uri: request.body.newUri,
-        name: request.body.name,
-        description: request.body.description,
-        category: request.body.category,
-        enabled: request.body.enabled
+  app.post('/admin/boards/edit', requireAdmin, async (request, response) => {
+    requireCsrf(request);
+    requirePermission(request, 'boards.manage');
+    const changes = {
+      uri: request.body.newUri,
+      name: request.body.name,
+      description: request.body.description,
+      category: request.body.category,
+      enabled: request.body.enabled
+    };
+    if (request.body.settingsForm === '1') {
+      changes.tags = request.body.tags;
+      changes.sfw = request.body.sfw;
+      changes.settings = {
+        requireImageForThread: optionalBoolean(request.body.requireImageForThread),
+        allowVideoUploads: optionalBoolean(request.body.allowVideoUploads),
+        allowSpoilers: optionalBoolean(request.body.allowSpoilers),
+        showPosterIds: optionalBoolean(request.body.showPosterIds),
+        allowSage: optionalBoolean(request.body.allowSage),
+        rejectDuplicateImages: optionalBoolean(request.body.rejectDuplicateImages),
+        maxThreads: optionalPositiveInteger(request.body.maxThreads),
+        bumpLimit: optionalPositiveInteger(request.body.bumpLimit),
+        replyLimit: optionalPositiveInteger(request.body.replyLimit),
+        maxFilesPerPost: optionalPositiveInteger(request.body.maxFilesPerPost),
+        anonymousName: request.body.anonymousName
       };
-      if (request.body.settingsForm === '1') {
-        changes.tags = request.body.tags;
-        changes.sfw = request.body.sfw;
-        changes.settings = {
-          requireImageForThread: optionalBoolean(request.body.requireImageForThread),
-          allowVideoUploads: optionalBoolean(request.body.allowVideoUploads),
-          allowSpoilers: optionalBoolean(request.body.allowSpoilers),
-          showPosterIds: optionalBoolean(request.body.showPosterIds),
-          allowSage: optionalBoolean(request.body.allowSage),
-          rejectDuplicateImages: optionalBoolean(request.body.rejectDuplicateImages),
-          maxThreads: optionalPositiveInteger(request.body.maxThreads),
-          bumpLimit: optionalPositiveInteger(request.body.bumpLimit),
-          replyLimit: optionalPositiveInteger(request.body.replyLimit),
-          maxFilesPerPost: optionalPositiveInteger(request.body.maxFilesPerPost),
-          anonymousName: request.body.anonymousName
-        };
-        changes.appearance = {
-          ...(request.body.boardBannerForm === '1' ? { banner: {
-            enabled: request.body.boardBannerEnabled === '1',
-            filename: request.body.boardBannerFilename,
-            linkUrl: request.body.boardBannerLinkUrl,
-            alt: request.body.boardBannerAlt
-          } } : {}),
-          bannerText: request.body.bannerText,
-          bannerPath: request.body.bannerPath,
-          theme: Object.fromEntries(Object.entries(request.body)
-            .filter(([key]) => key.startsWith('boardTheme_'))
-            .map(([key, value]) => [key.slice(11), value]))
-        };
-      }
-      await service.updateBoard(request.body.uri, changes, { actor: request.staff });
-      response.redirect(303, request.body.settingsForm === '1'
-        ? `/admin/boards/${encodeURIComponent(request.body.uri)}/settings`
-        : '/admin/boards');
-    } catch (error) {
-      next(error);
+      changes.appearance = {
+        ...(request.body.boardBannerForm === '1' ? { banner: {
+          enabled: request.body.boardBannerEnabled === '1',
+          filename: request.body.boardBannerFilename,
+          linkUrl: request.body.boardBannerLinkUrl,
+          alt: request.body.boardBannerAlt
+        } } : {}),
+        bannerText: request.body.bannerText,
+        bannerPath: request.body.bannerPath,
+        theme: Object.fromEntries(Object.entries(request.body)
+          .filter(([key]) => key.startsWith('boardTheme_'))
+          .map(([key, value]) => [key.slice(11), value]))
+      };
     }
+    await service.updateBoard(request.body.uri, changes, { actor: request.staff });
+    response.redirect(303, request.body.settingsForm === '1'
+      ? `/admin/boards/${encodeURIComponent(request.body.uri)}/settings`
+      : '/admin/boards');
   });
 
-  app.post('/admin/boards/toggle', requireAdmin, async (request, response, next) => {
-    try {
-      requireCsrf(request);
-      requirePermission(request, 'boards.manage');
-      await service.toggleBoard(request.body.uri, { actor: request.staff });
-      response.redirect(303, '/admin/boards');
-    } catch (error) {
-      next(error);
-    }
+  app.post('/admin/boards/toggle', requireAdmin, async (request, response) => {
+    requireCsrf(request);
+    requirePermission(request, 'boards.manage');
+    await service.toggleBoard(request.body.uri, { actor: request.staff });
+    response.redirect(303, '/admin/boards');
   });
 
-  app.post('/admin/boards/move', requireAdmin, async (request, response, next) => {
-    try {
-      requireCsrf(request);
-      requirePermission(request, 'boards.manage');
-      await service.moveBoard(request.body.uri, request.body.direction, { actor: request.staff });
-      response.redirect(303, '/admin/boards');
-    } catch (error) {
-      next(error);
-    }
+  app.post('/admin/boards/move', requireAdmin, async (request, response) => {
+    requireCsrf(request);
+    requirePermission(request, 'boards.manage');
+    await service.moveBoard(request.body.uri, request.body.direction, { actor: request.staff });
+    response.redirect(303, '/admin/boards');
   });
 
-  app.post('/admin/boards/rules/add', requireAdmin, async (request, response, next) => {
-    try {
-      requireCsrf(request);
-      requirePermission(request, 'boards.manage');
-      const rule = await service.addBoardRule(request.body.uri, request.body.text, { actor: request.staff });
-      const board = service.getBoard(request.body.uri);
-      response.redirect(303, `/admin/boards/${encodeURIComponent(board.uri)}/rules#rule-${encodeURIComponent(rule.id)}`);
-    } catch (error) {
-      next(error);
-    }
+  app.post('/admin/boards/rules/add', requireAdmin, async (request, response) => {
+    requireCsrf(request);
+    requirePermission(request, 'boards.manage');
+    const rule = await service.addBoardRule(request.body.uri, request.body.text, { actor: request.staff });
+    const board = service.getBoard(request.body.uri);
+    response.redirect(303, `/admin/boards/${encodeURIComponent(board.uri)}/rules#rule-${encodeURIComponent(rule.id)}`);
   });
 
-  app.post('/admin/boards/rules/edit', requireAdmin, async (request, response, next) => {
-    try {
-      requireCsrf(request);
-      requirePermission(request, 'boards.manage');
-      const rule = await service.updateBoardRule(
-        request.body.uri,
-        request.body.ruleId,
-        request.body.text,
-        { actor: request.staff }
-      );
-      const board = service.getBoard(request.body.uri);
-      response.redirect(303, `/admin/boards/${encodeURIComponent(board.uri)}/rules#rule-${encodeURIComponent(rule.id)}`);
-    } catch (error) {
-      next(error);
-    }
+  app.post('/admin/boards/rules/edit', requireAdmin, async (request, response) => {
+    requireCsrf(request);
+    requirePermission(request, 'boards.manage');
+    const rule = await service.updateBoardRule(
+      request.body.uri,
+      request.body.ruleId,
+      request.body.text,
+      { actor: request.staff }
+    );
+    const board = service.getBoard(request.body.uri);
+    response.redirect(303, `/admin/boards/${encodeURIComponent(board.uri)}/rules#rule-${encodeURIComponent(rule.id)}`);
   });
 
-  app.post('/admin/boards/rules/delete', requireAdmin, async (request, response, next) => {
-    try {
-      requireCsrf(request);
-      requirePermission(request, 'boards.manage');
-      await service.deleteBoardRule(request.body.uri, request.body.ruleId, { actor: request.staff });
-      const board = service.getBoard(request.body.uri);
-      response.redirect(303, `/admin/boards/${encodeURIComponent(board.uri)}/rules`);
-    } catch (error) {
-      next(error);
-    }
+  app.post('/admin/boards/rules/delete', requireAdmin, async (request, response) => {
+    requireCsrf(request);
+    requirePermission(request, 'boards.manage');
+    await service.deleteBoardRule(request.body.uri, request.body.ruleId, { actor: request.staff });
+    const board = service.getBoard(request.body.uri);
+    response.redirect(303, `/admin/boards/${encodeURIComponent(board.uri)}/rules`);
   });
 
-  app.post('/admin/boards/filters/add', requireAdmin, async (request, response, next) => {
-    try {
-      requireCsrf(request);
-      requirePermission(request, 'boards.manage');
-      const filter = await service.addBoardFilter(request.body.uri, request.body, { actor: request.staff });
-      const board = service.getBoard(request.body.uri);
-      response.redirect(303, `/admin/boards/${encodeURIComponent(board.uri)}/settings#filter-${encodeURIComponent(filter.id)}`);
-    } catch (error) {
-      next(error);
-    }
+  app.post('/admin/boards/filters/add', requireAdmin, async (request, response) => {
+    requireCsrf(request);
+    requirePermission(request, 'boards.manage');
+    const filter = await service.addBoardFilter(request.body.uri, request.body, { actor: request.staff });
+    const board = service.getBoard(request.body.uri);
+    response.redirect(303, `/admin/boards/${encodeURIComponent(board.uri)}/settings#filter-${encodeURIComponent(filter.id)}`);
   });
 
-  app.post('/admin/boards/filters/delete', requireAdmin, async (request, response, next) => {
-    try {
-      requireCsrf(request);
-      requirePermission(request, 'boards.manage');
-      await service.deleteBoardFilter(request.body.uri, request.body.filterId, { actor: request.staff });
-      const board = service.getBoard(request.body.uri);
-      response.redirect(303, `/admin/boards/${encodeURIComponent(board.uri)}/settings`);
-    } catch (error) {
-      next(error);
-    }
+  app.post('/admin/boards/filters/delete', requireAdmin, async (request, response) => {
+    requireCsrf(request);
+    requirePermission(request, 'boards.manage');
+    await service.deleteBoardFilter(request.body.uri, request.body.filterId, { actor: request.staff });
+    const board = service.getBoard(request.body.uri);
+    response.redirect(303, `/admin/boards/${encodeURIComponent(board.uri)}/settings`);
   });
 
-  app.post('/admin/boards/delete', requireAdmin, async (request, response, next) => {
-    try {
-      requireCsrf(request);
-      requirePermission(request, 'boards.manage');
-      await service.deleteBoard(request.body.uri, { actor: request.staff });
-      response.redirect(303, '/admin/boards');
-    } catch (error) {
-      next(error);
-    }
+  app.post('/admin/boards/delete', requireAdmin, async (request, response) => {
+    requireCsrf(request);
+    requirePermission(request, 'boards.manage');
+    await service.deleteBoard(request.body.uri, { actor: request.staff });
+    response.redirect(303, '/admin/boards');
   });
 
-  app.post('/admin/staff/add', requireAdmin, async (request, response, next) => {
-    try {
-      requireCsrf(request);
-      requirePermission(request, 'staff.manage');
-      await service.addStaffAccount(request.body, request.staff);
-      response.redirect(303, '/admin/staff');
-    } catch (error) {
-      next(error);
-    }
+  app.post('/admin/staff/add', requireAdmin, async (request, response) => {
+    requireCsrf(request);
+    requirePermission(request, 'staff.manage');
+    await service.addStaffAccount(request.body, request.staff);
+    response.redirect(303, '/admin/staff');
   });
 
-  app.post('/admin/staff/edit', requireAdmin, async (request, response, next) => {
-    try {
-      requireCsrf(request);
-      requirePermission(request, 'staff.manage');
-      const account = await service.updateStaffAccount(request.body.accountId, request.body, request.staff);
-      if (account.id === request.staff.id && account.sessionVersion !== request.staff.sessionVersion) {
-        admin.clearCookie(request, response);
-        response.redirect(303, '/admin/login');
-        return;
-      }
-      response.redirect(303, '/admin/staff');
-    } catch (error) {
-      next(error);
-    }
-  });
-
-  app.post('/admin/staff/toggle', requireAdmin, async (request, response, next) => {
-    try {
-      requireCsrf(request);
-      requirePermission(request, 'staff.manage');
-      await service.toggleStaffAccount(request.body.accountId, request.staff);
-      response.redirect(303, '/admin/staff');
-    } catch (error) {
-      next(error);
-    }
-  });
-
-  app.post('/admin/account', requireAdmin, async (request, response, next) => {
-    try {
-      requireCsrf(request);
-      requirePermission(request, 'dashboard.view');
-      if (request.staff.legacy) throw httpError(400, 'The environment administrator is configured through environment variables.');
-      const account = await service.updateStaffAccount(request.staff.id, {
-        displayName: request.body.displayName,
-        password: request.body.password,
-        role: request.staff.role,
-        scope: request.staff.scope,
-        boardIds: request.staff.boardIds
-      }, request.staff);
-      if (account.sessionVersion !== request.staff.sessionVersion) {
-        admin.clearCookie(request, response);
-        response.redirect(303, '/admin/login');
-        return;
-      }
-      response.redirect(303, '/admin/account');
-    } catch (error) {
-      next(error);
-    }
-  });
-
-  app.post('/admin/account/mfa/setup', requireAdmin, async (request, response, next) => {
-    try {
-      requireCsrf(request);
-      requirePermission(request, 'dashboard.view');
-      const enrollment = await service.beginStaffMfa(request.body.currentPassword, request.staff);
-      response.setHeader('Cache-Control', 'no-store');
-      response.send(renderer.adminMfaSetup(
-        request.staff,
-        admin.csrf(request.adminSession),
-        enrollment
-      ));
-    } catch (error) {
-      next(error);
-    }
-  });
-
-  app.post('/admin/account/mfa/confirm', requireAdmin, async (request, response, next) => {
-    try {
-      requireCsrf(request);
-      requirePermission(request, 'dashboard.view');
-      await service.confirmStaffMfa(request.body.mfaCode, request.staff);
+  app.post('/admin/staff/edit', requireAdmin, async (request, response) => {
+    requireCsrf(request);
+    requirePermission(request, 'staff.manage');
+    const account = await service.updateStaffAccount(request.body.accountId, request.body, request.staff);
+    if (account.id === request.staff.id && account.sessionVersion !== request.staff.sessionVersion) {
       admin.clearCookie(request, response);
       response.redirect(303, '/admin/login');
-    } catch (error) {
-      next(error);
+      return;
     }
+    response.redirect(303, '/admin/staff');
   });
 
-  app.post('/admin/account/mfa/disable', requireAdmin, async (request, response, next) => {
-    try {
-      requireCsrf(request);
-      requirePermission(request, 'dashboard.view');
-      await service.disableStaffMfa(
-        request.body.currentPassword,
-        request.body.mfaCode,
-        request.staff
-      );
+  app.post('/admin/staff/toggle', requireAdmin, async (request, response) => {
+    requireCsrf(request);
+    requirePermission(request, 'staff.manage');
+    await service.toggleStaffAccount(request.body.accountId, request.staff);
+    response.redirect(303, '/admin/staff');
+  });
+
+  app.post('/admin/account', requireAdmin, async (request, response) => {
+    requireCsrf(request);
+    requirePermission(request, 'dashboard.view');
+    if (request.staff.legacy) throw httpError(400, 'Update the setup administrator through npm run settings -- set adminPassword.');
+    const account = await service.updateStaffAccount(request.staff.id, {
+      displayName: request.body.displayName,
+      password: request.body.password,
+      role: request.staff.role,
+      scope: request.staff.scope,
+      boardIds: request.staff.boardIds
+    }, request.staff);
+    if (account.sessionVersion !== request.staff.sessionVersion) {
       admin.clearCookie(request, response);
       response.redirect(303, '/admin/login');
-    } catch (error) {
-      next(error);
+      return;
     }
+    response.redirect(303, '/admin/account');
+  });
+
+  app.post('/admin/account/mfa/setup', requireAdmin, async (request, response) => {
+    requireCsrf(request);
+    requirePermission(request, 'dashboard.view');
+    const enrollment = await service.beginStaffMfa(request.body.currentPassword, request.staff);
+    response.setHeader('Cache-Control', 'no-store');
+    response.send(renderer.adminMfaSetup(
+      request.staff,
+      admin.csrf(request.adminSession),
+      enrollment
+    ));
+  });
+
+  app.post('/admin/account/mfa/confirm', requireAdmin, async (request, response) => {
+    requireCsrf(request);
+    requirePermission(request, 'dashboard.view');
+    await service.confirmStaffMfa(request.body.mfaCode, request.staff);
+    admin.clearCookie(request, response);
+    response.redirect(303, '/admin/login');
+  });
+
+  app.post('/admin/account/mfa/disable', requireAdmin, async (request, response) => {
+    requireCsrf(request);
+    requirePermission(request, 'dashboard.view');
+    await service.disableStaffMfa(
+      request.body.currentPassword,
+      request.body.mfaCode,
+      request.staff
+    );
+    admin.clearCookie(request, response);
+    response.redirect(303, '/admin/login');
   });
 
   async function resolveBoard(request, response, next, value) {
-    try {
-      const board = await service.publicBoard(value);
-      if (!board || !board.enabled) return next(httpError(404, 'Board not found.'));
-      request.board = board;
-      next();
-    } catch (error) {
-      next(error);
-    }
+    const board = await service.publicBoard(value);
+    if (!board || !board.enabled) return next(httpError(404, 'Board not found.'));
+    request.board = board;
+    next();
   }
 
   app.param('boardUri', resolveBoard);
@@ -1553,16 +1373,10 @@ function createApp(overrides = {}) {
     });
   }
 
-  app.post('/:boardUri/post', postRateLimit, requirePostingAuthorization, uploads.middleware, postHandler(false));
-  app.post('/:boardUri/post.php', postRateLimit, requirePostingAuthorization, uploads.middleware, postHandler(false));
+  app.post(['/:boardUri/post', '/:boardUri/post.php'], postRateLimit, requirePostingAuthorization, uploads.middleware, postHandler(false));
 
-  app.get('/:boardUri/', (request, response) => renderBoardPage(request.board, 1, response));
-  app.get('/:boardUri/index.html', (request, response) => renderBoardPage(request.board, 1, response));
-  app.get('/:boardUri/catalog', async (request, response) => {
-    const view = await service.publicCatalog(request.board, request.query.page);
-    response.send(renderer.catalog(view.data, view.threads, request.board, view.stats, view));
-  });
-  app.get('/:boardUri/catalog.html', async (request, response) => {
+  app.get(['/:boardUri/', '/:boardUri/index.html'], (request, response) => renderBoardPage(request.board, 1, response));
+  app.get(['/:boardUri/catalog', '/:boardUri/catalog.html'], async (request, response) => {
     const view = await service.publicCatalog(request.board, request.query.page);
     response.send(renderer.catalog(view.data, view.threads, request.board, view.stats, view));
   });
@@ -1577,8 +1391,7 @@ function createApp(overrides = {}) {
     response.send(renderer.boardRules(request.board, stats));
   });
   app.get('/:boardUri/:page.html', (request, response) => renderBoardPage(request.board, request.params.page, response));
-  app.get('/:boardUri/thread/:id', (request, response) => renderThread(request, response, request.board.id));
-  app.get('/:boardUri/res/:id.html', (request, response) => renderThread(request, response, request.board.id));
+  app.get(['/:boardUri/thread/:id', '/:boardUri/res/:id.html'], (request, response) => renderThread(request, response, request.board.id));
 
   app.use((request, response) => {
     response.status(404).send(renderer.message('Not found', 'That page or thread does not exist.', { line: '' }, '/'));
@@ -1605,7 +1418,7 @@ function createApp(overrides = {}) {
         method: request.method,
         path: request.path,
         status,
-        error: String(error?.message || 'Unknown error').slice(0, 1000)
+        error: 'Request could not complete'
       }));
     }
     response.status(status);

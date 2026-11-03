@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { MongoClient } = require('mongodb');
-const { loadConfig } = require('../config');
+const { configuredSettings } = require('../lib/settings');
 const { MongoStore, documentsFromData } = require('../lib/mongo-store');
 const { createDefaultBoard, normalizeData } = require('../lib/store');
 
@@ -33,7 +33,7 @@ function prepareMigration(parsed, config) {
 }
 
 async function main() {
-  const config = loadConfig();
+  const config = await configuredSettings();
   const args = parseArguments(process.argv.slice(2));
   const sourcePath = path.resolve(args.source || config.dataFile);
   const backupPath = `${sourcePath}.backup`;
@@ -46,7 +46,7 @@ async function main() {
     for (const [name, entries] of Object.entries(documents)) console.log(`  ${name}: ${entries.length}`);
     return;
   }
-  if (!config.mongoUrl) throw new Error('Set MONGO_URL or MONGODB_URI before running the migration.');
+  if (!config.mongoUrl) throw new Error('Configure a MongoDB DATABASE_URL before running the migration.');
   if (!fs.existsSync(backupPath)) {
     fs.copyFileSync(sourcePath, backupPath, fs.constants.COPYFILE_EXCL);
     console.log(`Backup created: ${backupPath}`);
@@ -86,7 +86,7 @@ async function main() {
 }
 
 if (require.main === module) main().catch(error => {
-  console.error(`Migration failed: ${error.message}`);
+  console.error('Migration failed. Check database access and source files.');
   process.exitCode = 1;
 });
 

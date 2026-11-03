@@ -1,35 +1,17 @@
 'use strict';
 
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
 const test = require('node:test');
 const { loadConfig } = require('../config');
 
-function restoreEnvironment(name, value) {
-  if (value === undefined) delete process.env[name];
-  else process.env[name] = value;
-}
-
-test('STORAGE supports environment configuration and explicit app overrides remain isolated', t => {
-  const previousStorage = process.env.STORAGE;
-  const previousDataDir = process.env.DATA_DIR;
-  t.after(() => {
-    restoreEnvironment('STORAGE', previousStorage);
-    restoreEnvironment('DATA_DIR', previousDataDir);
-  });
-
-  process.env.STORAGE = 'json';
-  process.env.DATA_DIR = '/environment-data';
-  const environmentConfig = loadConfig();
-  assert.equal(environmentConfig.storage, 'json');
-  assert.equal(environmentConfig.dataDir, '/environment-data');
-
-  const isolatedDirectory = path.join(os.tmpdir(), 'chikochan-config-override');
-  const overrideConfig = loadConfig({ storage: 'mongodb', dataDir: isolatedDirectory });
-  assert.equal(overrideConfig.storage, 'mongodb');
-  assert.equal(overrideConfig.dataDir, isolatedDirectory);
+test('configuration is explicit, isolated, and does not mutate defaults', () => {
+  const config = loadConfig({ storage: 'json', dataDir: '/chiko', site: { title: 'My Chiko' } });
+  assert.equal(config.storage, 'json');
+  assert.equal(config.dataDir, '/chiko');
+  assert.equal(loadConfig().site.title, 'ChikoChan');
+  config.features.api = false;
+  assert.equal(loadConfig().features.api, true);
+  assert.throws(() => loadConfig(JSON.parse('{"__proto__":{"polluted":true}}')), /Invalid configuration key/);
 });
 
 test('report categories are typed, unique, and include the configured default', () => {
@@ -66,18 +48,7 @@ test('media limits and processor commands are typed without requiring installed 
   assert.throws(() => loadConfig({ limits: { maxVideoPixels: 0 } }), /positive integer/);
   assert.throws(() => loadConfig({ media: { ffprobePath: '' } }), /non-empty command or path/);
 
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'chikochan-media-config-'));
-  const configPath = path.join(directory, 'config.json');
-  const previousPath = process.env.CHIKO_CONFIG;
-  t.after(() => {
-    restoreEnvironment('CHIKO_CONFIG', previousPath);
-    fs.rmSync(directory, { recursive: true, force: true });
-  });
-  fs.writeFileSync(configPath, JSON.stringify({
-    media: { ffprobePath: 'configured-ffprobe', ffmpegPath: 'configured-ffmpeg' }
-  }));
-  process.env.CHIKO_CONFIG = configPath;
-  const configured = loadConfig();
+  const configured = loadConfig({ media: { ffprobePath: 'configured-ffprobe', ffmpegPath: 'configured-ffmpeg' } });
   assert.equal(configured.media.ffprobePath, 'configured-ffprobe');
   assert.equal(configured.media.ffmpegPath, 'configured-ffmpeg');
 });
@@ -104,7 +75,7 @@ test('localization defaults to English and accepts only bounded language tags', 
   );
 });
 
-test('Turnstile is disabled by default and requires typed environment-only secrets', t => {
+test('Turnstile is disabled by default and requires typed database secrets', t => {
   assert.equal(loadConfig().antiAbuse.turnstile.enabled, false);
   const enabled = loadConfig({
     antiAbuse: {
@@ -122,7 +93,7 @@ test('Turnstile is disabled by default and requires typed environment-only secre
   assert.equal(enabled.antiAbuse.turnstile.timeoutMs, 2500);
   assert.throws(() => loadConfig({
     antiAbuse: { turnstile: { enabled: true, siteKey: 'site-key', secretKey: '' } }
-  }), /requires TURNSTILE_SITE_KEY and TURNSTILE_SECRET_KEY/);
+  }), /requires antiAbuse.turnstile.siteKey and antiAbuse.turnstile.secretKey/);
   assert.throws(() => loadConfig({
     antiAbuse: { turnstile: { failureMode: 'sometimes' } }
   }), /failureMode/);
@@ -130,18 +101,7 @@ test('Turnstile is disabled by default and requires typed environment-only secre
     antiAbuse: { turnstile: { allowedHostnames: ['https://boards.example/path'] } }
   }), /valid hostnames/);
 
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'chikochan-turnstile-config-'));
-  const configPath = path.join(directory, 'config.json');
-  const previousPath = process.env.CHIKO_CONFIG;
-  t.after(() => {
-    restoreEnvironment('CHIKO_CONFIG', previousPath);
-    fs.rmSync(directory, { recursive: true, force: true });
-  });
-  fs.writeFileSync(configPath, JSON.stringify({
-    antiAbuse: { turnstile: { secretKey: 'must-not-live-here' } }
-  }));
-  process.env.CHIKO_CONFIG = configPath;
-  assert.throws(() => loadConfig(), /secret keys are environment-only/);
+
 });
 
 test('trusted proxies and production security requirements fail closed', () => {
@@ -188,11 +148,11 @@ test('trusted proxies and production security requirements fail closed', () => {
   assert.equal(standalone.mongo.requireTransactions, false);
   assert.throws(
     () => loadConfig({ ...production, rateLimit: { backend: 'memory' } }),
-    /shared MongoDB storage|RATE_LIMIT_STORE/
+    /shared MongoDB storage|rateLimit.backend/
   );
   assert.throws(
     () => loadConfig({ ...production, postingAuthorization: { enabled: false } }),
-    /POSTING_AUTH_REQUIRED/
+    /postingAuthorization.enabled/
   );
 });
 
@@ -211,7 +171,7 @@ test('request, quarantine, metadata, and shared limiter settings are typed', () 
   assert.deepEqual(config.rateLimit.operations.deletePassword, { windowMs: 2000, limit: 2 });
   assert.throws(
     () => loadConfig({ rateLimit: { backend: 'redis', redisUrl: '' } }),
-    /requires REDIS_URL/
+    /requires rateLimit.redisUrl/
   );
   assert.throws(
     () => loadConfig({ media: { stripMetadata: false, stripMetadataRequired: true } }),
@@ -219,7 +179,7 @@ test('request, quarantine, metadata, and shared limiter settings are typed', () 
   );
 });
 
-test('staff MFA requires an environment-style 32-byte encryption key when enabled', () => {
+test('staff MFA requires an 32-byte encryption key when enabled', () => {
   const config = loadConfig({
     staffMfa: {
       enabled: true,

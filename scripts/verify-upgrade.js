@@ -3,7 +3,7 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { loadConfig } = require('../config');
+const { configuredSettings } = require('../lib/settings');
 const { dataFromDocuments, documentsFromData } = require('../lib/mongo-store');
 const { SCHEMA_VERSION, createDefaultBoard, normalizeData } = require('../lib/store');
 
@@ -61,9 +61,9 @@ function parseArguments(argv) {
   return values;
 }
 
-function main() {
+async function main() {
   const args = parseArguments(process.argv.slice(2));
-  const config = loadConfig();
+  const config = await configuredSettings();
   const sourcePath = path.resolve(args.source || config.dataFile);
   const parsed = JSON.parse(fs.readFileSync(sourcePath, 'utf8'));
   const result = verifyParsedUpgrade(parsed, {
@@ -75,13 +75,9 @@ function main() {
   console.log('No source files or database records were changed.');
 }
 
-if (require.main === module) {
-  try {
-    main();
-  } catch (error) {
-    console.error(`Upgrade verification failed: ${error.message}`);
-    process.exitCode = 1;
-  }
-}
+if (require.main === module) main().catch(() => {
+  console.error('Upgrade verification failed. Check settings and the source file.');
+  process.exitCode = 1;
+});
 
 module.exports = { parseArguments, summary, verifyParsedUpgrade };

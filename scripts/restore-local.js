@@ -58,7 +58,7 @@ function main() {
   const args = parseArguments(process.argv.slice(2));
   const manifest = restoreLocalBackup(args.backup, args.target);
   console.log(`Verified and restored ${manifest.files.length} files into new directory ${path.resolve(args.target)}`);
-  console.log('Review the restored data before changing DATA_DIR.');
+  console.log('Review the restored data before changing your database connection.');
 }
 
 if (require.main === module) {

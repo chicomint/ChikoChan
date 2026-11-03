@@ -4,7 +4,7 @@
   "description": "A lightweight Node.js imageboard inspired by Vichan.",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
+    "start": "node scripts/start.js",
     "start:local": "node scripts/start-local.js",
     "dev": "node --watch server.js",
     "migrate:mongo": "node scripts/migrate-to-mongo.js",
@@ -15,7 +15,10 @@
     "load:test": "node scripts/load-benchmark.js",
     "diagnose": "node scripts/diagnose.js",
     "test": "node --test",
-    "check": "node --check server.js && node --check app.js && node --check client.js && node --check config.js && node --check lib/bootstrap.js && node --check lib/installer.js && node --check lib/installer-client.js && node --check lib/install-state.js"
+    "check": "node scripts/check.js",
+    "setup": "node scripts/settings.js setup",
+    "settings": "node scripts/settings.js",
+    "migrate:settings": "node scripts/settings.js migrate"
   },
   "engines": {
     "node": ">=22"

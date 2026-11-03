@@ -1,13 +1,13 @@
 'use strict';
 
-const { loadConfig } = require('../config');
+const { configuredSettings } = require('../lib/settings');
 const { diagnose } = require('../lib/diagnostics');
 const { MongoStore } = require('../lib/mongo-store');
 const { JsonStore } = require('../lib/store');
 const { UploadManager } = require('../lib/uploads');
 
 async function main() {
-  const config = loadConfig();
+  const config = await configuredSettings();
   const store = config.storage === 'json' ? new JsonStore(config) : new MongoStore(config);
   const uploads = new UploadManager(config);
   try {
@@ -31,6 +31,6 @@ async function main() {
 }
 
 main().catch(error => {
-  console.error(`Diagnostics failed: ${error.message}`);
+  console.error('Diagnostics failed. Check database access, settings, and media files.');
   process.exitCode = 1;
 });

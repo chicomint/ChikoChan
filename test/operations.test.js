@@ -76,7 +76,7 @@ test('local backup and guarded restore verify checksums and include no environme
   fs.writeFileSync(path.join(source, 'posts.json'), '{"threads":[]}\n');
   fs.writeFileSync(path.join(source, 'src', 'safe.png'), 'synthetic-public-media');
   fs.writeFileSync(path.join(source, 'quarantine', 'pending.bin'), 'synthetic-private-media');
-  fs.writeFileSync(path.join(source, '.env'), 'DO_NOT_COPY=this-file\n');
+  fs.writeFileSync(path.join(source, '.env'), 'DATABASE_URL=json:./unused\n');
 
   const manifest = createLocalBackup(source, backup, { includeQuarantine: true });
   assert.equal(manifest.files.length, 3);

@@ -39,7 +39,12 @@ function createLocalBackup(sourceDirectory, destinationDirectory, options = {}) 
   fs.mkdirSync(payload, { recursive: true, mode: 0o700 });
   if (fs.lstatSync(sourceFile).isSymbolicLink()) throw new Error('Refusing symbolic-link posts.json.');
   fs.copyFileSync(sourceFile, path.join(payload, 'posts.json'), fs.constants.COPYFILE_EXCL);
-  for (const name of ['src', ...(options.includeQuarantine ? ['quarantine'] : [])]) {
+  const settingsFile = path.join(source, 'settings.json');
+  if (fs.existsSync(settingsFile)) {
+    if (fs.lstatSync(settingsFile).isSymbolicLink()) throw new Error('Refusing symbolic-link settings.json.');
+    fs.copyFileSync(settingsFile, path.join(payload, 'settings.json'), fs.constants.COPYFILE_EXCL);
+  }
+  for (const name of ['src', 'preferences', ...(options.includeQuarantine ? ['quarantine'] : [])]) {
     const input = path.join(source, name);
     if (fs.existsSync(input)) fs.cpSync(input, path.join(payload, name), { recursive: true, errorOnExist: true });
   }
@@ -75,7 +80,7 @@ function main() {
   const args = parseArguments(process.argv.slice(2));
   const manifest = createLocalBackup(args.source, args.destination, args);
   console.log(`Backup created with ${manifest.files.length} files at ${path.resolve(args.destination)}`);
-  console.log('The backup intentionally excludes .env and other credentials.');
+  console.log('Encrypted settings are included. Back up .chiko-key and the private database connection separately.');
 }
 
 if (require.main === module) {

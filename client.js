@@ -4,7 +4,7 @@
   var PASSWORD_KEY = 'chikochan-post-password';
   var HIDDEN_KEY = 'chikochan-hidden-posts';
   var THEME_KEY = 'chikochan-theme';
-  var preview = null;
+  var chikoPreview = null;
 
   function normalizeTheme(theme) {
     return theme === 'dark' || theme === 'yotsuba-b' ? theme : 'light';
@@ -23,7 +23,7 @@
   document.addEventListener('change', function (event) {
     if (!event.target.matches('.theme-selector')) return;
     var theme = normalizeTheme(event.target.value);
-    try { window.localStorage.setItem(THEME_KEY, theme); } catch (error) { /* Storage is optional. */ }
+    storageSet(THEME_KEY, theme);
     applyTheme(theme);
   });
 
@@ -39,21 +39,43 @@
     });
   }
 
+  var tinyPrefs = {};
+  var preferenceSave = Promise.resolve();
+
   function storageGet(key, fallback) {
-    try {
-      var value = window.localStorage.getItem(key);
-      return value === null ? fallback : value;
-    } catch (error) {
-      return fallback;
-    }
+    return tinyPrefs[key] === undefined ? fallback : tinyPrefs[key];
   }
 
   function storageSet(key, value) {
+    tinyPrefs[key] = value;
+    var snapshot = JSON.stringify(tinyPrefs);
+    preferenceSave = preferenceSave.then(function () {
+      return fetch('/preferences', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: snapshot
+      }).then(function (response) {
+        if (!response.ok) throw new Error('Preferences could not be saved.');
+        return true;
+      });
+    }).catch(function () { return false; });
+  }
+
+  async function loadPreferences() {
     try {
-      window.localStorage.setItem(key, value);
-    } catch (error) {
-      // Private browsing modes can disable storage; posting still works.
-    }
+      var response = await fetch('/preferences', { cache: 'no-store' });
+      if (!response.ok) return;
+      var saved = await response.json();
+      tinyPrefs = saved.values;
+      if (saved.fresh) {
+        // Import this browser's old preferences once, then remove the local copy.
+        for (var key of [PASSWORD_KEY, HIDDEN_KEY, THEME_KEY]) {
+          var old = window.localStorage.getItem(key);
+          if (old !== null) tinyPrefs[key] = old;
+        }
+        storageSet(THEME_KEY, normalizeTheme(storageGet(THEME_KEY, 'light')));
+        if (!await preferenceSave) return;
+      }
+      for (var key of [PASSWORD_KEY, HIDDEN_KEY, THEME_KEY]) window.localStorage.removeItem(key);
+    } catch { /* Storage is optional; use this page's in-memory defaults. */ }
   }
 
   function randomPassword() {
@@ -127,8 +149,8 @@
   }
 
   function removePreview() {
-    if (preview) preview.remove();
-    preview = null;
+    if (chikoPreview) chikoPreview.remove();
+    chikoPreview = null;
   }
 
   function showPreview(link, event) {
@@ -136,24 +158,24 @@
     var source = document.getElementById('p' + postId);
     if (!source || link.closest('#p' + postId)) return;
     removePreview();
-    preview = source.cloneNode(true);
-    preview.removeAttribute('id');
-    preview.querySelectorAll('[id]').forEach(function (node) { node.removeAttribute('id'); });
-    preview.querySelectorAll('form, .post-menu, .delete, .post-hide-button').forEach(function (node) { node.remove(); });
-    preview.querySelectorAll('.video-box').forEach(function (box) { collapseVideo(box); });
-    preview.classList.add('quote-preview');
-    document.body.appendChild(preview);
-    var left = Math.min(event.clientX + 14, window.innerWidth - preview.offsetWidth - 8);
-    var top = Math.min(event.clientY + 14, window.innerHeight - preview.offsetHeight - 8);
-    preview.style.left = Math.max(4, left) + 'px';
-    preview.style.top = Math.max(4, top) + 'px';
+    chikoPreview = source.cloneNode(true);
+    chikoPreview.removeAttribute('id');
+    chikoPreview.querySelectorAll('[id]').forEach(function (node) { node.removeAttribute('id'); });
+    chikoPreview.querySelectorAll('form, .post-menu, .delete, .post-hide-button').forEach(function (node) { node.remove(); });
+    chikoPreview.querySelectorAll('.video-box').forEach(function (box) { collapseVideo(box); });
+    chikoPreview.classList.add('quote-preview');
+    document.body.appendChild(chikoPreview);
+    var left = Math.min(event.clientX + 14, window.innerWidth - chikoPreview.offsetWidth - 8);
+    var top = Math.min(event.clientY + 14, window.innerHeight - chikoPreview.offsetHeight - 8);
+    chikoPreview.style.left = Math.max(4, left) + 'px';
+    chikoPreview.style.top = Math.max(4, top) + 'px';
   }
 
   function hiddenIds() {
     try {
       var parsed = JSON.parse(storageGet(HIDDEN_KEY, '[]'));
       return Array.isArray(parsed) ? parsed.map(String) : [];
-    } catch (error) {
+    } catch {
       return [];
     }
   }
@@ -214,7 +236,7 @@
       });
       container.dataset.widgetId = String(widgetId);
       if (status && status.isConnected) status.remove();
-    } catch (error) {
+    } catch {
       container.textContent = 'Human verification could not load. Refresh and try again.';
     }
     return container;
@@ -477,7 +499,8 @@
     }
   });
 
-  document.addEventListener('DOMContentLoaded', function () {
+  document.addEventListener('DOMContentLoaded', async function () {
+    await loadPreferences();
     initializeTheme();
     initializePasswords();
     initializeHiddenPosts();

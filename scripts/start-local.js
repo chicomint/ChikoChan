@@ -1,8 +1,5 @@
 'use strict';
 
-// Always use the built-in local database, even when .env contains MongoDB settings.
-process.env.STORAGE = 'json';
-process.env.DATA_DIR = './data';
-process.env.TRUST_PROXY = '0';
-
+// A connection override keeps the local development shortcut independent of MongoDB.
+process.env.DATABASE_URL = 'json:./data';
 require('../server');

@@ -10,6 +10,8 @@
 # Privacy Policy
 
 -We do not store your IP address.
--We only store the content of threads and posts, along with the date and time they were posted.
+-Site data includes posts and timestamps, moderation records, staff accounts, and settings.
+-Browser preferences (theme, hidden posts, and saved deletion passwords) are encrypted in the database and associated with a random private cookie. Clearing that cookie starts fresh preferences.
+-Abuse controls use keyed fingerprints rather than storing raw IP addresses. Optional external verification providers process requests when enabled.
 
 Updated: July 22, 2026**

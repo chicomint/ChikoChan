@@ -7,13 +7,15 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const { chromium } = require(process.argv[2] || 'playwright');
+const { encryptionKey } = require('../lib/settings');
 const { createApp } = require('../app');
 
 async function main() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'chikochan-post-layout-'));
+  encryptionKey(path.join(directory, 'test-key'), true);
   const app = createApp({
-    storage: 'json', dataDir: directory,
+    storage: 'json', dataDir: directory, keyFile: path.join(directory, 'test-key'),
     limits: { postRateLimit: 1000 },
     rateLimit: { operations: {
       threadCreate: { windowMs: 60000, limit: 1000 },
@@ -90,7 +92,7 @@ async function main() {
       target.attachments.push(structuredClone(video));
     });
     for (let index = 0; index < 12; index += 1) await post(op.id, `>>${op.id}\nReply ${index + 1}.`);
-    const launchOptions = { headless: true, executablePath: process.env.PLAYWRIGHT_EXECUTABLE_PATH || undefined };
+    const launchOptions = { headless: true, executablePath: process.argv[3] || undefined };
     browser = await chromium.launch(launchOptions);
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
     const errors = [];

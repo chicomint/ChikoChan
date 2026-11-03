@@ -1,20 +1,22 @@
 'use strict';
 
-// Optional integration runner: install Playwright separately, then set PLAYWRIGHT_MODULE
-// to its module path. Uses disposable JSON storage and never contacts the hosted site.
+// Optional integration runner: install Playwright separately, then pass its module path and
+// optional browser executable as command arguments. Uses disposable JSON storage and never contacts the hosted site.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const { chromium } = require(process.argv[2] || 'playwright');
+const { encryptionKey } = require('../lib/settings');
 const { createApp } = require('../app');
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
 
 async function main() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'chikochan-browser-'));
+  encryptionKey(path.join(directory, 'test-key'), true);
   const app = createApp({
-    storage: 'json', dataDir: directory,
+    storage: 'json', dataDir: directory, keyFile: path.join(directory, 'test-key'),
     adminPassword: 'browser-admin-password', adminSessionSecret: 'browser-admin-session-secret',
     rateLimit: { policies: { captchaAuthorization: { windowMs: 600000, limit: 100 } } },
     limits: { postRateLimit: 100, reportRateLimit: 100 },
@@ -36,7 +38,7 @@ async function main() {
   const base = `http://127.0.0.1:${server.address().port}`;
   let browser;
   try {
-    browser = await chromium.launch({ headless: true, executablePath: process.env.PLAYWRIGHT_EXECUTABLE_PATH || undefined });
+    browser = await chromium.launch({ headless: true, executablePath: process.argv[3] || undefined });
     for (const javaScriptEnabled of [false, true]) {
       const context = await browser.newContext({ javaScriptEnabled, viewport: { width: 1280, height: 900 } });
       // Provider integration is mocked; the real client script, fetch authorization,

@@ -52,7 +52,7 @@ process.on('SIGTERM', () => shutdown('SIGTERM'));
 
 const started = start().catch(async () => {
   // MongoDB errors can contain credentials. Keep startup diagnostics private.
-  console.error('Could not start ChikoChan. Check database access and the configuration requirements in README.md.');
+  console.error('Could not start ChikoChan. Check database access and the private .chiko-key. For first use run npm run setup; for old configuration run npm run migrate:settings. See README.md.');
   process.exitCode = 1;
   await bootstrap?.close();
 });

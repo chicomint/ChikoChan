@@ -103,7 +103,7 @@ async function main() {
       await post(opening.id, `>>${opening.id}\nA compact reply beside the OP.`);
       await post(opening.id, 'An image reply remains in its own box.',
         [{ name: 'reply.png', mime: 'image/png', data: landscape }]);
-      for (let index = 0; index < 6; index += 1) await post(opening.id, `Reply ${index + 1}.`);
+      for (let index = 0; index < 12; index += 1) await post(opening.id, `Reply ${index + 1}.`);
       wrappingThreads.push({ id: opening.id });
     }
     const launchOptions = { headless: true, executablePath: process.argv[3] || undefined };
@@ -176,9 +176,17 @@ async function main() {
         await fits();
         const layout = await page.locator(`#t${entry.id}`).evaluate(thread => {
           const media = thread.querySelector('.op .post-attachments').getBoundingClientRect();
+          const image = thread.querySelector('.op .post-img').getBoundingClientRect();
+          const metadata = thread.querySelector('.op .file-info').getBoundingClientRect();
+          const header = thread.querySelector('.op .delete').getBoundingClientRect();
+          const text = document.createRange();
+          text.selectNodeContents(thread.querySelector('.op .comment'));
           const op = thread.querySelector('.op').getBoundingClientRect();
           const replies = Array.from(thread.querySelectorAll('.reply-container'), node => node.getBoundingClientRect());
           return {
+            mediaWidth: media.width, imageWidth: image.width, metadataWidth: metadata.width,
+            replyGap: replies[0].left - image.right, headerGap: header.left - image.right,
+            textGap: Array.from(text.getClientRects()).find(rect => rect.width > 0)?.left - image.right,
             firstBeside: replies[0].top < media.bottom && replies[0].left >= media.right,
             below: replies.some(rect => rect.top >= media.bottom && rect.left < media.left + 20),
             stacked: replies[0].top >= Math.max(media.bottom, op.bottom),
@@ -188,9 +196,15 @@ async function main() {
         });
         assert.equal(layout.ordered, true, 'Reply boxes never overlap');
         assert.equal(layout.contained, true, 'A thread contains its OP media and every reply');
+        assert.ok(Math.abs(layout.mediaWidth - layout.imageWidth) < 1,
+          `OP float follows the displayed thumbnail width at ${width}px: ${JSON.stringify(layout)}`);
+        assert.ok(layout.metadataWidth <= layout.imageWidth + 1, 'Filenames and metadata stay within the thumbnail width');
         if (width > 768) {
           assert.equal(layout.firstBeside, true, 'Replies start beside short OPs');
           assert.equal(layout.below, true, 'Later replies return to the left below the OP image');
+          assert.ok(Math.abs(layout.replyGap - 15) < 1, 'Replies use a consistent 15px gap');
+          assert.ok(Math.abs(layout.headerGap - 15) < 1, 'The OP header uses the same 15px gap');
+          if (!Number.isNaN(layout.textGap)) assert.ok(Math.abs(layout.textGap - 15) < 1, 'OP text uses the same 15px gap');
         } else {
           assert.equal(layout.stacked, true, 'Mobile replies stack below the complete OP');
         }
@@ -208,6 +222,24 @@ async function main() {
       } else {
         assert.ok(summary.y >= media.y + media.height, 'Mobile omitted-reply notices stack below the OP');
       }
+    }
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto(`${base}/chiko/thread/${wrappingThreads[0].id}`);
+    await page.locator('.op .post-attachment').evaluate(attachment => { attachment.style.maxWidth = 'none'; });
+    for (const width of [100, 150, 200, 260, 375, 520]) {
+      await page.locator('.op .post-img').evaluate((image, width) => {
+        Object.assign(image.style, { width: `${width}px`, maxWidth: '100%', maxHeight: 'none' });
+      }, width);
+      const layout = await page.locator('.op').evaluate(op => {
+        const image = op.querySelector('.post-img').getBoundingClientRect();
+        const media = op.querySelector('.post-attachments').getBoundingClientRect();
+        const reply = op.closest('.thread').querySelector('.reply-container').getBoundingClientRect();
+        return { imageWidth: image.width, mediaWidth: media.width, gap: reply.left - image.right };
+      });
+      assert.ok(Math.abs(layout.imageWidth - width) < 1, `Render a ${width}px thumbnail`);
+      assert.ok(Math.abs(layout.mediaWidth - width) < 1, `Fit the float to a ${width}px thumbnail`);
+      assert.ok(Math.abs(layout.gap - 15) < 1, `Keep a 15px gap beside a ${width}px thumbnail`);
+      await fits();
     }
     assert.deepEqual(videoRequests, [], 'No video files requested while browsing previews');
     for (const entry of videos) {

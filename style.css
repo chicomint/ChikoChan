@@ -395,6 +395,24 @@ hr {
   max-width: min(65%, 676px);
 }
 
+.op .post-attachments {
+  margin-right: 15px;
+  width: fit-content;
+}
+
+.op .post-attachment {
+  max-width: 250px;
+  width: auto;
+}
+
+.op .file-info {
+  contain: inline-size;
+}
+
+.op .file-download {
+  white-space: normal;
+}
+
 .image-box {
   margin: 0;
   max-width: 100%;
@@ -1089,6 +1107,11 @@ blockquote.comment {
     max-width: 42%;
     margin-left: 0;
     margin-right: 12px;
+  }
+
+  .op .post-attachments {
+    margin-right: 12px;
+    max-width: min(140px, 42%);
   }
 
   .op .post-body {

@@ -482,12 +482,14 @@ hr {
   cursor: pointer;
 }
 
-/* One formatting context contains each post's floats. Text remains in normal
-   flow, so paragraphs can continue below a thumbnail without detached columns. */
 .post-body {
   display: flow-root;
   max-width: 100%;
   min-width: 0;
+}
+
+.op .post-body {
+  display: block;
 }
 
 .post-content {
@@ -561,14 +563,13 @@ blockquote.comment {
 }
 
 .omitted-replies {
-  clear: both;
   color: var(--muted-text);
+  display: flow-root;
   font-size: 12px;
   margin: 4px 0 3px 20px;
 }
 
 .replies {
-  clear: both;
   margin: 4px 0 0 10px;
 }
 
@@ -803,8 +804,7 @@ blockquote.comment {
 }
 
 .thread::after,
-.reply::after,
-.replies::after {
+.reply::after {
   clear: both;
   content: "";
   display: table;
@@ -1089,6 +1089,10 @@ blockquote.comment {
     max-width: 42%;
     margin-left: 0;
     margin-right: 12px;
+  }
+
+  .op .post-body {
+    display: flow-root;
   }
 
   .post-attachment,

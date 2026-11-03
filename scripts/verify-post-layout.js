@@ -92,6 +92,20 @@ async function main() {
       target.attachments.push(structuredClone(video));
     });
     for (let index = 0; index < 12; index += 1) await post(op.id, `>>${op.id}\nReply ${index + 1}.`);
+    const wrappingThreads = [];
+    for (const [label, data, comment] of [
+      ['portrait', portrait, 'A short OP.'],
+      ['landscape', landscape, 'A short OP.'],
+      ['image-only', portrait, ''],
+      ['long-filename-'.repeat(20), portrait, 'A short OP.']
+    ]) {
+      const opening = await post(0, comment, [{ name: `${label}.png`, mime: 'image/png', data }]);
+      await post(opening.id, `>>${opening.id}\nA compact reply beside the OP.`);
+      await post(opening.id, 'An image reply remains in its own box.',
+        [{ name: 'reply.png', mime: 'image/png', data: landscape }]);
+      for (let index = 0; index < 6; index += 1) await post(opening.id, `Reply ${index + 1}.`);
+      wrappingThreads.push({ id: opening.id });
+    }
     const launchOptions = { headless: true, executablePath: process.argv[3] || undefined };
     browser = await chromium.launch(launchOptions);
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
@@ -153,6 +167,47 @@ async function main() {
       }
       await page.locator(`#p${op.id}`).scrollIntoViewIfNeeded();
       await page.screenshot({ path: path.join(directory, `thread-${width}.png`), fullPage: true });
+    }
+    for (const width of [1280, 1024, 769, 768, 390, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      for (const entry of wrappingThreads) {
+        await page.goto(`${base}/chiko/thread/${entry.id}`);
+        await page.locator('.op .post-img').evaluate(node => node.decode());
+        await fits();
+        const layout = await page.locator(`#t${entry.id}`).evaluate(thread => {
+          const media = thread.querySelector('.op .post-attachments').getBoundingClientRect();
+          const op = thread.querySelector('.op').getBoundingClientRect();
+          const replies = Array.from(thread.querySelectorAll('.reply-container'), node => node.getBoundingClientRect());
+          return {
+            firstBeside: replies[0].top < media.bottom && replies[0].left >= media.right,
+            below: replies.some(rect => rect.top >= media.bottom && rect.left < media.left + 20),
+            stacked: replies[0].top >= Math.max(media.bottom, op.bottom),
+            ordered: replies.every((rect, index) => !index || rect.top >= replies[index - 1].bottom),
+            contained: thread.getBoundingClientRect().bottom >= Math.max(media.bottom, replies.at(-1).bottom)
+          };
+        });
+        assert.equal(layout.ordered, true, 'Reply boxes never overlap');
+        assert.equal(layout.contained, true, 'A thread contains its OP media and every reply');
+        if (width > 768) {
+          assert.equal(layout.firstBeside, true, 'Replies start beside short OPs');
+          assert.equal(layout.below, true, 'Later replies return to the left below the OP image');
+        } else {
+          assert.equal(layout.stacked, true, 'Mobile replies stack below the complete OP');
+        }
+        if (entry === wrappingThreads[0]) {
+          await page.locator(`#t${entry.id}`).screenshot({ path: path.join(directory, `wrapped-thread-${width}.png`) });
+        }
+      }
+      await page.goto(`${base}/chiko/`);
+      await fits();
+      const summary = await page.locator(`#t${wrappingThreads[0].id} .omitted-replies`).boundingBox();
+      const media = await page.locator(`#p${wrappingThreads[0].id} .post-attachments`).boundingBox();
+      if (width > 768) {
+        assert.ok(summary.y < media.y + media.height && summary.x >= media.x + media.width,
+          'Omitted-reply notices use the space beside the OP');
+      } else {
+        assert.ok(summary.y >= media.y + media.height, 'Mobile omitted-reply notices stack below the OP');
+      }
     }
     assert.deepEqual(videoRequests, [], 'No video files requested while browsing previews');
     for (const entry of videos) {

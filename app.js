@@ -18,12 +18,13 @@ const { MongoStore } = require('./lib/mongo-store');
 const { MaintenanceRunner } = require('./lib/maintenance');
 const { MediaSafetyService } = require('./lib/media-safety');
 const { Renderer } = require('./lib/render');
+const { retainedIp, retentionDays } = require('./lib/ip-policy');
 const { staffCan } = require('./lib/staff');
 const { JsonStore } = require('./lib/store');
 const { HookRegistry } = require('./lib/hooks');
 const { Translator } = require('./lib/i18n');
 const { UploadManager } = require('./lib/uploads');
-const { escapeXML, httpError } = require('./lib/utils');
+const { escapeHTML, escapeXML, httpError } = require('./lib/utils');
 const { createAuthorizationNonceStore, PostingAuthorization } = require('./lib/posting-authorization');
 const { createRateLimitStore, RateLimiter } = require('./lib/rate-limit');
 
@@ -188,6 +189,8 @@ function createApp(overrides = {}) {
     ['/admin/reports/reopen', 'report-reopen'],
     ['/admin/trash/restore', 'trash-restore'],
     ['/admin/trash/purge', 'trash-purge'],
+    ['/admin/trash/delete', 'trash-permanent-delete'],
+    ['/admin/ip-retention', 'ip-retention'],
     ['/admin/boards/add', 'board-add'],
     ['/admin/boards/edit', 'board-edit'],
     ['/admin/boards/delete', 'board-delete'],
@@ -335,7 +338,18 @@ function createApp(overrides = {}) {
 
   for (const [key, page] of Object.entries(config.site?.pages || {})) {
     app.get(`/${key}`, (request, response) => {
-      const content = page.sourcePath ? fs.readFileSync(page.sourcePath, 'utf8') : page.content;
+      let content = page.content;
+      try {
+        if (page.sourcePath) content = fs.readFileSync(page.sourcePath, 'utf8');
+      } catch {
+        response.status(503);
+        content = 'This page is temporarily unavailable. Please try again later.';
+      }
+      if (key === 'rules') {
+        const days = retentionDays(service.getData(), config);
+        content = content.replaceAll('{{IP_RETENTION}}', days === 0 ? 'forever (until the administrator changes this policy)' : `${days} days`);
+      }
+      response.set('Cache-Control', 'no-store');
       response.send(renderer.page(key, { ...page, content }));
     });
   }
@@ -619,12 +633,15 @@ function createApp(overrides = {}) {
             sha256: candidate.sha256
           }))
         });
-        await Promise.all(media.map(candidate => uploads.approveCandidate(candidate)));
+        const promotions = await Promise.allSettled(media.map(candidate => uploads.approveCandidate(candidate)));
+        const failedPromotion = promotions.find(result => result.status === 'rejected');
+        if (failedPromotion) throw failedPromotion.reason;
         const capcodeValues = Array.isArray(request.body.capcode)
           ? request.body.capcode
           : [request.body.capcode];
         const context = {
           clientKey: abuseIdentity(request, 'poster'),
+          address: clientAddresses.address(request),
           ...(staffOnly ? {
             actor: request.staff,
             capcode: capcodeValues.includes('1')
@@ -634,6 +651,7 @@ function createApp(overrides = {}) {
           ? service.createReply(threadId, request.body, media, { ...context, boardUri: board.uri })
           : service.createThread(request.body, media, { ...context, boardId: board.id }));
         postCommitted = true;
+        response.append('Set-Cookie', `chiko_posted_name=${encodeURIComponent(String(request.body.name || '').slice(0, 100))}; Path=/; SameSite=Strict; Max-Age=120${request.secure ? '; Secure' : ''}`);
         hooks.notify('afterPost', {
           boardUri: board.uri,
           threadId: result.threadId,
@@ -953,6 +971,29 @@ function createApp(overrides = {}) {
     response.redirect(303, '/admin');
   });
 
+  app.get('/admin/post-ip/:id', requireAdmin, (request, response) => {
+    const target = targetForPost(request.params.id);
+    requirePermission(request, 'ips.view', target.thread.boardId);
+    response.json({ ip: retainedIp(target.post, service.getData(), config) || '', available: Boolean(retainedIp(target.post, service.getData(), config)) });
+  });
+
+  app.post('/admin/ip-retention', requireAdmin, async (request, response) => {
+    requireCsrf(request);
+    await service.updateIpRetention(request.body.customDays || request.body.days, staffActionContext(request));
+    response.redirect(303, '/admin');
+  });
+
+  app.post('/admin/trash/delete', requireAdmin, async (request, response) => {
+    requireCsrf(request);
+    requirePermission(request, 'trash.purge');
+    if (request.body.confirm !== 'yes') {
+      return response.send(renderer.adminShell('Confirm permanent deletion', `<h1>Permanently delete?</h1><p>This cannot be undone. Live media will be removed. Backups have separate retention.</p><form method="POST" action="/admin/trash/delete">${renderer.csrf(admin.csrf(request.adminSession))}<input type="hidden" name="trashId" value="${escapeHTML(request.body.trashId || '')}"><input type="hidden" name="all" value="${request.body.all === '1' ? '1' : '0'}"><input type="hidden" name="confirm" value="yes">${request.body.all === '1' ? '<label>Type EMPTY to confirm all permitted trash: <input name="confirmation" pattern="EMPTY" required autocomplete="off"></label>' : ''}<button class="danger-button">Confirm permanent deletion</button> <a href="/admin/trash">Cancel</a></form>`));
+    }
+    if (request.body.all === '1' && request.body.confirmation !== 'EMPTY') throw httpError(400, 'Type EMPTY to confirm.');
+    await service.purgeTrash({ id: String(request.body.trashId || ''), all: request.body.all === '1' }, staffActionContext(request));
+    response.redirect(303, '/admin/trash');
+  });
+
   app.post('/admin/trash/restore', requireAdmin, async (request, response) => {
     requireCsrf(request);
     requirePermission(request, 'posts.delete');
@@ -1052,7 +1093,7 @@ function createApp(overrides = {}) {
 
   app.post('/admin/ban', requireAdmin, async (request, response) => {
     requireCsrf(request);
-    const allowedDurations = new Set([0, 3600000, 86400000, 604800000]);
+    const allowedDurations = new Set([0, 3600000, 21600000, 86400000, 259200000, 604800000, 2592000000]);
     const duration = Number(request.body.duration);
     if (!allowedDurations.has(duration)) throw httpError(400, 'Invalid ban duration.');
     const target = targetForPost(request.body.postId);
@@ -1063,7 +1104,7 @@ function createApp(overrides = {}) {
 
   app.post('/admin/sanction', requireAdmin, async (request, response) => {
     requireCsrf(request);
-    const allowedDurations = new Set([0, 3600000, 86400000, 604800000]);
+    const allowedDurations = new Set([0, 3600000, 21600000, 86400000, 259200000, 604800000, 2592000000]);
     const duration = Number(request.body.duration);
     if (!allowedDurations.has(duration)) throw httpError(400, 'Invalid sanction duration.');
     const target = targetForPost(request.body.postId);
@@ -1074,6 +1115,7 @@ function createApp(overrides = {}) {
     await service.sanctionPost(request.body.postId, {
       kind: request.body.kind,
       target: request.body.target,
+      ipNetwork: request.body.ipNetwork,
       scope: request.body.scope,
       fileHash: request.body.fileHash,
       durationMs: duration,

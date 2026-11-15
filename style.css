@@ -2781,7 +2781,7 @@ html[data-theme="dark"] .spoiler:focus {
   object-fit: contain;
 }
 .site-page-content { overflow-wrap: anywhere; }
-.site-page-content p { margin: 0.8em 0; }
+.site-page-content p { margin: 0.8em 0; white-space: pre-line; }
 .site-page-content h2, .site-page-content h3,
 .site-page-content h4, .site-page-content h5, .site-page-content h6 { margin: 1em 0 0.4em; }
 .site-page-content ul, .site-page-content ol { padding-left: 2em; }
@@ -2839,3 +2839,6 @@ body[data-board] > .announcement {
   .date-time { white-space: normal; }
   .nameBlock, .subject { overflow-wrap: anywhere; min-width: 0; }
 }
+
+.staff-ip { font: inherit; margin-left: .5em; min-width: 5em; overflow-wrap: anywhere; }
+.admin-ban-form input { max-width: 100%; }

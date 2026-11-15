@@ -142,7 +142,8 @@ async function main() {
       await Promise.all([page.waitForNavigation(), page.locator('#delete-form button').click()]);
       assert.equal(app.locals.chikochan.service.getData().threads.find(item => item.id === threadId).replies.length, 2);
       await page.goto(threadUrl);
-      // Empty reply reaches server validation through a native form submission.
+      // Clear the remembered #fortune command too, to submit a truly empty reply.
+      await page.locator('.reply-form [name="name"]').fill('');
       await solve(page.locator('.reply-form'));
       await Promise.all([page.waitForNavigation(), page.locator('.reply-form [type="submit"]').click()]);
       assert.match(await page.locator('body').innerText(), /Request failed/);

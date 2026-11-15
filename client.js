@@ -13,6 +13,8 @@
   function applyTheme(theme) {
     var root = document.documentElement;
     theme = normalizeTheme(theme);
+    try { localStorage.setItem(THEME_KEY, theme); } catch (_) {}
+    document.cookie = 'chiko_theme=' + theme + '; Path=/; SameSite=Lax; Max-Age=31536000';
     if (theme !== 'light') root.setAttribute('data-theme', theme);
     else root.removeAttribute('data-theme');
     document.querySelectorAll('.theme-selector').forEach(function (select) {
@@ -32,7 +34,8 @@
   }, true);
 
   function initializeTheme() {
-    var saved = storageGet(THEME_KEY, 'light');
+    var saved = document.documentElement.getAttribute('data-theme') || 'light';
+    try { saved = localStorage.getItem(THEME_KEY) || saved; } catch (_) {}
     applyTheme(saved);
     document.querySelectorAll('.global-banner img').forEach(function (img) {
       if (img.complete && !img.naturalWidth) img.closest('.global-banner').hidden = true;
@@ -74,8 +77,46 @@
         storageSet(THEME_KEY, normalizeTheme(storageGet(THEME_KEY, 'light')));
         if (!await preferenceSave) return;
       }
-      for (var key of [PASSWORD_KEY, HIDDEN_KEY, THEME_KEY]) window.localStorage.removeItem(key);
+      for (var key of [PASSWORD_KEY, HIDDEN_KEY]) window.localStorage.removeItem(key);
     } catch { /* Storage is optional; use this page's in-memory defaults. */ }
+  }
+
+  function initializeNames() {
+    try {
+      var cookie = document.cookie.match(/(?:^|; )chiko_posted_name=([^;]*)/);
+      if (cookie) {
+        localStorage.setItem('chikochan-poster-name', decodeURIComponent(cookie[1]));
+        document.cookie = 'chiko_posted_name=; Path=/; SameSite=Strict; Max-Age=0';
+      }
+      var name = localStorage.getItem('chikochan-poster-name') || '';
+      document.querySelectorAll('form input[name="name"]').forEach(function (input) {
+        if (!input.value) input.value = name;
+      });
+    } catch (_) {}
+  }
+
+  function initializeIpFields() {
+    document.querySelectorAll('.admin-post-summary .staff-ip[data-post-id]').forEach(function (button) {
+      var id = button.dataset.postId;
+      var loading = false;
+      async function reveal() {
+        if (loading) return;
+        loading = true;
+        try {
+          var reply = await fetch('/admin/post-ip/' + id, { cache: 'no-store', redirect: 'error' });
+          if (!reply.ok) throw new Error();
+          var result = await reply.json();
+          if (button.matches(':hover') || document.activeElement === button) button.textContent = result.ip || 'IP: expired or unavailable';
+        } catch (_) { button.textContent = 'IP: unavailable'; }
+        loading = false;
+      }
+      button.addEventListener('mouseenter', reveal);
+      button.addEventListener('focus', reveal);
+      button.addEventListener('click', reveal);
+      function conceal() { button.textContent = 'IP: •••'; }
+      button.addEventListener('mouseleave', conceal);
+      button.addEventListener('blur', conceal);
+    });
   }
 
   function randomPassword() {
@@ -500,6 +541,9 @@
   });
 
   document.addEventListener('DOMContentLoaded', async function () {
+    initializeNames();
+    initializeTheme();
+    void initializeIpFields();
     await loadPreferences();
     initializeTheme();
     initializePasswords();

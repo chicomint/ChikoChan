@@ -8,10 +8,10 @@
 -No spam or excessive repeated posts.
 
 # Privacy Policy
+We only store the content of threads and posts, along with the date and time they were posted.
 
--We do not store your IP address.
--Site data includes posts and timestamps, moderation records, staff accounts, and settings.
--Browser preferences (theme, hidden posts, and saved deletion passwords) are encrypted in the database and associated with a random private cookie. Clearing that cookie starts fresh preferences.
--Abuse controls use keyed fingerprints rather than storing raw IP addresses. Optional external verification providers process requests when enabled.
+We save your IP address when you make a thread or reply. This helps us deal with spam, abuse, and bans. Only admins can see IPs.
+They are never shown publicly. The ip only keep for 15 days and it will permanently remove
+IP bans keep the address or range until the ban ends or is lifted. Permanent bans keep it while active.
 
-Updated: July 22, 2026**
+Privacy questions or deletion requests? [Contact the admin](/contact) with the relevant post links.

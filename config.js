@@ -40,6 +40,7 @@ const DEFAULTS = {
     encryptionKey: ''
   },
   privacy: {
+    ipRetentionDays: 30,
     abuseFingerprintSecret: ''
   },
   postingAuthorization: {
@@ -257,15 +258,14 @@ function bundledMediaBinary(packageName, pick) {
 
 function loadPages(rootDir) {
   const pagesDir = path.join(rootDir, 'page');
-  if (!fs.existsSync(pagesDir)) return {};
-
   const pages = {};
-  for (const filename of fs.readdirSync(pagesDir).sort()) {
+  const filenames = new Set(['about.txt', 'contact.txt', 'news.txt', 'rule.txt', ...(fs.existsSync(pagesDir) ? fs.readdirSync(pagesDir) : [])]);
+  for (const filename of [...filenames].sort()) {
     if (!filename.endsWith('.txt')) continue;
     const key = filename.slice(0, -4);
     const routeKey = key === 'rule' ? 'rules' : key;
     const title = routeKey.charAt(0).toUpperCase() + routeKey.slice(1);
-    const content = fs.readFileSync(path.join(pagesDir, filename), 'utf8');
+    const content = ''; // Read the source on each request so edits appear immediately.
     pages[routeKey] = { title, content, sourcePath: path.join(pagesDir, filename) };
   }
   return pages;
@@ -356,7 +356,8 @@ function loadConfig(overrides = {}) {
   }
 
   config.rootDir = ROOT_DIR;
-  config.site.pages = { ...loadPages(config.rootDir), ...(config.site.pages || {}) };
+  config.site.pages = { ...(config.site.pages || {}), ...loadPages(config.rootDir) };
+  if (!Number.isInteger(config.privacy.ipRetentionDays) || config.privacy.ipRetentionDays < 0 || config.privacy.ipRetentionDays > 36500) throw new Error('privacy.ipRetentionDays must be 0 (forever) or 1–36500.');
   config.dataDir = path.resolve(ROOT_DIR, config.dataDir);
   config.dataFile = path.join(config.dataDir, 'posts.json');
   config.uploadDir = path.join(config.dataDir, 'src');

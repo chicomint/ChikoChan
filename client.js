@@ -7,15 +7,19 @@
   var chikoPreview = null;
 
   function normalizeTheme(theme) {
-    return theme === 'dark' || theme === 'yotsuba-b' ? theme : 'light';
+    return ['site', 'light', 'dark', 'yotsuba-b', 'miku'].includes(theme) ? theme : 'site';
   }
 
-  function applyTheme(theme) {
+  function applyTheme(theme, remember) {
     var root = document.documentElement;
     theme = normalizeTheme(theme);
-    try { localStorage.setItem(THEME_KEY, theme); } catch (_) {}
-    document.cookie = 'chiko_theme=' + theme + '; Path=/; SameSite=Lax; Max-Age=31536000';
-    if (theme !== 'light') root.setAttribute('data-theme', theme);
+    if (remember) {
+      try { localStorage.setItem(THEME_KEY, theme); } catch (_) {}
+      document.cookie = 'chiko_theme=' + theme + '; Path=/; SameSite=Lax; Max-Age=31536000';
+    }
+    root.setAttribute('data-theme-choice', theme);
+    var active = theme === 'site' ? root.getAttribute('data-default-theme') || 'light' : theme;
+    if (active !== 'light') root.setAttribute('data-theme', active);
     else root.removeAttribute('data-theme');
     document.querySelectorAll('.theme-selector').forEach(function (select) {
       select.value = theme;
@@ -25,8 +29,9 @@
   document.addEventListener('change', function (event) {
     if (!event.target.matches('.theme-selector')) return;
     var theme = normalizeTheme(event.target.value);
+    if (document.documentElement.hasAttribute('data-theme-preview')) { applyTheme(theme, false); return; }
     storageSet(THEME_KEY, theme);
-    applyTheme(theme);
+    applyTheme(theme, true);
   });
 
   document.addEventListener('error', function (event) {
@@ -34,9 +39,10 @@
   }, true);
 
   function initializeTheme() {
-    var saved = document.documentElement.getAttribute('data-theme') || 'light';
-    try { saved = localStorage.getItem(THEME_KEY) || saved; } catch (_) {}
-    applyTheme(saved);
+    var root = document.documentElement;
+    var saved = root.getAttribute('data-theme-choice') || storageGet(THEME_KEY, 'site');
+    if (root.hasAttribute('data-theme-preview')) saved = 'site';
+    applyTheme(saved, false);
     document.querySelectorAll('.global-banner img').forEach(function (img) {
       if (img.complete && !img.naturalWidth) img.closest('.global-banner').hidden = true;
     });
@@ -44,6 +50,7 @@
 
   var tinyPrefs = {};
   var preferenceSave = Promise.resolve();
+  var preferencesLoaded = false;
 
   function storageGet(key, fallback) {
     return tinyPrefs[key] === undefined ? fallback : tinyPrefs[key];
@@ -51,6 +58,7 @@
 
   function storageSet(key, value) {
     tinyPrefs[key] = value;
+    if (!preferencesLoaded) return;
     var snapshot = JSON.stringify(tinyPrefs);
     preferenceSave = preferenceSave.then(function () {
       return fetch('/preferences', {
@@ -67,14 +75,21 @@
       var response = await fetch('/preferences', { cache: 'no-store' });
       if (!response.ok) return;
       var saved = await response.json();
-      tinyPrefs = saved.values;
+      var editedWhileLoading = Object.keys(tinyPrefs).length > 0;
+      tinyPrefs = Object.assign({}, saved.values, tinyPrefs);
+      tinyPrefs[THEME_KEY] = normalizeTheme(document.documentElement.getAttribute('data-theme-choice') || tinyPrefs[THEME_KEY] || 'site');
       if (saved.fresh) {
         // Import this browser's old preferences once, then remove the local copy.
-        for (var key of [PASSWORD_KEY, HIDDEN_KEY, THEME_KEY]) {
-          var old = window.localStorage.getItem(key);
-          if (old !== null) tinyPrefs[key] = old;
+        for (var key of [PASSWORD_KEY, HIDDEN_KEY]) {
+          try {
+            var old = window.localStorage.getItem(key);
+            if (old !== null && tinyPrefs[key] === undefined) tinyPrefs[key] = old;
+          } catch (_) {}
         }
-        storageSet(THEME_KEY, normalizeTheme(storageGet(THEME_KEY, 'light')));
+      }
+      preferencesLoaded = true;
+      if (saved.fresh || editedWhileLoading) {
+        storageSet(THEME_KEY, normalizeTheme(storageGet(THEME_KEY, 'site')));
         if (!await preferenceSave) return;
       }
       for (var key of [PASSWORD_KEY, HIDDEN_KEY]) window.localStorage.removeItem(key);
@@ -353,6 +368,7 @@
     }
   }
 
+
   function updateExpandedMedia(attachments) {
     if (!attachments) return;
     var expanded = Boolean(attachments.querySelector('.expanded-image, .post-video'));
@@ -493,6 +509,7 @@
   });
 
   document.addEventListener('submit', function (event) {
+    if (event.defaultPrevented) return;
     var confirmation = event.target.dataset.confirm;
     if (confirmation && !window.confirm(confirmation)) {
       event.preventDefault();
@@ -540,9 +557,35 @@
     }
   });
 
+
+  function initializeNavSearch() {
+    var forms = document.querySelectorAll('.nav-search');
+    if (!forms.length) return;
+    var dialog = document.createElement('dialog'); dialog.className = 'nav-search-dialog';
+    dialog.setAttribute('aria-labelledby', 'search-dialog-title');
+    dialog.innerHTML = '<div class="search-dialog-header"><h2 id="search-dialog-title">Search posts &amp; threads</h2><button type="button" aria-label="Close search">Close ×</button></div><div class="nav-search-results" aria-live="polite"></div>';
+    document.body.appendChild(dialog);
+    dialog.querySelector('button').addEventListener('click', function () { dialog.close(); });
+    var serial = 0;
+    forms.forEach(function (form) { form.addEventListener('submit', async function (event) {
+      event.preventDefault();
+      var query = new URLSearchParams(new FormData(form)); query.set('format', 'json');
+      if (!dialog.open) dialog.showModal();
+      var results = dialog.querySelector('.nav-search-results'); results.textContent = 'Searching…';
+      var request = ++serial;
+      try {
+        var response = await fetch('/search?' + query, { headers: { Accept: 'application/json' }, cache: 'no-store' });
+        var data = await response.json(); if (!response.ok) throw new Error(data.error || 'Search failed.');
+        if (serial === request) results.innerHTML = data.html;
+      } catch (error) { if (serial === request) results.textContent = error.message; }
+    }); });
+  }
+
   document.addEventListener('DOMContentLoaded', async function () {
+    initializeNavSearch();
     initializeNames();
     initializeTheme();
+    if (document.documentElement.hasAttribute('data-theme-preview')) { document.dispatchEvent(new CustomEvent('chikochan:ready')); return; }
     void initializeIpFields();
     await loadPreferences();
     initializeTheme();

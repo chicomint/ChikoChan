@@ -151,16 +151,16 @@ async function main() {
       await page.screenshot({ path: path.join(directory, `home-js-${javaScriptEnabled}.png`), fullPage: true });
       await page.goto(base + '/admin/login');
       await page.locator('[name="password"]').fill('browser-admin-password');
-      await Promise.all([page.waitForNavigation(), page.locator('button[type="submit"]').click()]);
+      await Promise.all([page.waitForNavigation(), page.getByRole('button', { name: 'Log in', exact: true }).click()]);
       assert.match(page.url(), /\/admin$/);
-      await page.goto(base + '/admin/customization');
+      await page.goto(base + '/admin/customization/branding');
       await page.locator('[name="bannerEnabled"]').check();
       await page.locator('[name="bannerFilename"]').selectOption(bannerFilename);
       await page.locator('[name="bannerAlt"]').fill('Test banner');
       await Promise.all([page.waitForNavigation(), page.locator('form[action="/admin/customization"] button[type="submit"]').click()]);
       for (const width of [1280, 390]) {
         await page.setViewportSize({ width, height: 900 });
-        await page.goto(base + '/admin/customization');
+        await page.goto(base + '/admin/customization/branding');
         assert.equal(await page.locator('[name="bannerFilename"]').inputValue(), bannerFilename);
         assert.equal(await page.locator('[name="bannerImageUrl"]').count(), 0);
         await page.locator('fieldset').filter({ has: page.locator('[name="bannerFilename"]') }).screenshot({ path: path.join(directory, `banner-picker-${width}-js-${javaScriptEnabled}.png`) });
@@ -234,7 +234,7 @@ async function main() {
         await page.reload();
         await page.waitForFunction(() => document.querySelector('.global-banner').hidden);
       }
-      await page.goto(base + '/admin/customization');
+      await page.goto(base + '/admin/customization/branding');
       await page.locator('[name="bannerEnabled"]').uncheck();
       await Promise.all([page.waitForNavigation(), page.locator('form[action="/admin/customization"] button[type="submit"]').click()]);
       await page.goto(base + '/chiko/');

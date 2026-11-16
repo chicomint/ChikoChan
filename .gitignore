@@ -6,3 +6,5 @@ src/
 node_modules/
 /data/
 .tmp-*
+
+.chiko-key

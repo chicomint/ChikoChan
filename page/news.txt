@@ -1,4 +1,6 @@
-#We update Privacy Policy
+#update a lot - 11/16/2026
+yea idk what I'm I even add
+#We update Privacy Policy - 11/15/2026
 Now we save your IP address when you make a thread or reply. This helps to deal with spam, abuse, and bans. Only admins can see IPs.
 They are never shown publicly. The ip only keep for 15 days and it will permanently remove
 IP bans keep the address or range until the ban ends or is lifted. Permanent bans keep it while active.

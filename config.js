@@ -50,6 +50,9 @@ const DEFAULTS = {
   },
   mediaSafety: {
     knownIllegalProvider: 'none',
+    gatewayUrl: '',
+    gatewayToken: '',
+    timeoutMs: 15000,
     failClosed: false,
     retainProviderResults: true
   },
@@ -67,7 +70,8 @@ const DEFAULTS = {
       captchaAuthorization: { windowMs: 10 * 60 * 1000, limit: 10 },
       boardCreate: { windowMs: 60 * 60 * 1000, limit: 10 },
       apiMutation: { windowMs: 60 * 1000, limit: 20 },
-      expensiveRead: { windowMs: 60 * 1000, limit: 30 }
+      expensiveRead: { windowMs: 60 * 1000, limit: 30 },
+      editorPreview: { windowMs: 60 * 1000, limit: 180 }
     }
   },
   anonymousName: 'Anonymous',
@@ -154,6 +158,8 @@ const DEFAULTS = {
       quarantineBucket: '',
       publicBucket: '',
       publicBaseUrl: '',
+      cachePurgeUrl: '',
+      cachePurgeToken: '',
       pathStyle: true,
       requestTimeoutMs: 10 * 1000,
       accessKeyId: '',
@@ -441,12 +447,18 @@ function loadConfig(overrides = {}) {
     throw new Error('mediaStorage.object.requestTimeoutMs must be an integer between 1000 and 60000.');
   }
   for (const key of ['endpoint', 'region', 'quarantineBucket', 'publicBucket', 'publicBaseUrl',
-    'accessKeyId', 'secretAccessKey', 'sessionToken']) {
+    'accessKeyId', 'secretAccessKey', 'sessionToken', 'cachePurgeUrl', 'cachePurgeToken']) {
     if (typeof objectStorage[key] !== 'string' || objectStorage[key].length > 2000
       || objectStorage[key].includes('\0')) {
       throw new Error(`mediaStorage.object.${key} must be a bounded string.`);
     }
   }
+  if (objectStorage.cachePurgeUrl) {
+    let purge;
+    try { purge = new URL(objectStorage.cachePurgeUrl); } catch { throw new Error('Invalid cache purge gateway URL.'); }
+    if (purge.protocol !== 'https:' || purge.username || purge.password || purge.hash || !objectStorage.cachePurgeToken) throw new Error('Cache purge gateway requires HTTPS and a token.');
+  }
+  if (/[\r\n\0]/.test(objectStorage.cachePurgeToken)) throw new Error('Invalid cache purge gateway token.');
   if (config.mediaStorage.backend === 'object') {
     let endpoint;
     let publicBaseUrl;
@@ -522,6 +534,14 @@ function loadConfig(overrides = {}) {
     || typeof config.mediaSafety.retainProviderResults !== 'boolean') {
     throw new Error('mediaSafety must contain a safe provider name and boolean policy values.');
   }
+  if (config.mediaSafety.gatewayUrl) {
+    let url;
+    try { url = new URL(config.mediaSafety.gatewayUrl); } catch { throw new Error('Invalid moderation gateway URL.'); }
+    if (url.protocol !== 'https:' || url.username || url.password || url.hash) throw new Error('Moderation gateway must use HTTPS without credentials or fragments.');
+  }
+  if (typeof config.mediaSafety.gatewayToken !== 'string' || config.mediaSafety.gatewayToken.length > 2000
+    || /[\r\n\0]/.test(config.mediaSafety.gatewayToken)
+    || !Number.isInteger(config.mediaSafety.timeoutMs) || config.mediaSafety.timeoutMs < 1000 || config.mediaSafety.timeoutMs > 60000) throw new Error('Invalid moderation gateway token or timeout.');
   if (config.postingAuthorization.enabled && config.postingAuthorization.secret.length < 32) {
     throw new Error('Enabled posting authorization requires postingAuthorization.secret with at least 32 characters.');
   }

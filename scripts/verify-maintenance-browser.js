@@ -56,7 +56,7 @@ async function main() {
       assert.equal(await page.locator('.staff-ip').count(), 0);
       await page.goto(base + '/admin/login');
       await page.locator('[name="password"]').fill('browser-admin-password');
-      await Promise.all([page.waitForURL('**/admin'), page.locator('button[type="submit"]').click()]);
+      await Promise.all([page.waitForURL('**/admin'), page.getByRole('button', { name: 'Log in', exact: true }).click()]);
       await page.waitForSelector('.admin-post-summary .staff-ip');
       const ipControl = page.locator(`.staff-ip[data-post-id="${seed.id}"]`);
       assert.equal(await ipControl.textContent(), 'IP: •••');

@@ -2,6 +2,7 @@
 
 const express = require('express');
 const crypto = require('node:crypto');
+const { Readable } = require('node:stream');
 const { AsyncLocalStorage } = require('node:async_hooks');
 const { installPreferences } = require('./lib/preferences');
 const { NativeCaptcha } = require('./lib/native-captcha');
@@ -23,6 +24,7 @@ const { staffCan } = require('./lib/staff');
 const { JsonStore } = require('./lib/store');
 const { HookRegistry } = require('./lib/hooks');
 const { Translator } = require('./lib/i18n');
+const { installSiteEditor } = require('./lib/site-editor');
 const { UploadManager } = require('./lib/uploads');
 const { escapeHTML, escapeXML, httpError } = require('./lib/utils');
 const { createAuthorizationNonceStore, PostingAuthorization } = require('./lib/posting-authorization');
@@ -70,6 +72,8 @@ function createApp(overrides = {}) {
   const service = new BoardService(config, store, uploads);
   const mediaSafety = new MediaSafetyService(config, service, {
     provider: overrides.knownIllegalMediaProvider,
+    gateway: overrides.moderationGateway,
+    fetchImpl: overrides.moderationFetch,
     logger: overrides.logger
   });
   const mediaSafetyStatus = mediaSafety.status();
@@ -82,7 +86,7 @@ function createApp(overrides = {}) {
       throw new Error('Configured known-illegal-media provider is unavailable while fail-closed mode is enabled.');
     }
   }
-  const renderer = new Renderer(config, () => store.cache || service.getData(), i18n);
+  const renderer = new Renderer(config, () => renderContext.getStore()?.presentation || store.cache || service.getData(), i18n);
   const admin = new AdminAuth(config);
   const antiAbuse = new TurnstileAdapter(config, {
     fetchImpl: overrides.turnstileFetch,
@@ -148,7 +152,7 @@ function createApp(overrides = {}) {
       `media-src 'self'${publicMediaOrigin ? ` ${publicMediaOrigin}` : ''}`,
       "object-src 'none'",
       antiAbuse.enabled ? `script-src 'self' ${TURNSTILE_ORIGIN}` : "script-src 'self'",
-      antiAbuse.enabled ? `frame-src ${TURNSTILE_ORIGIN}` : "frame-src 'none'",
+      antiAbuse.enabled ? `frame-src 'self' ${TURNSTILE_ORIGIN}` : "frame-src 'self'",
       antiAbuse.enabled ? `connect-src 'self' ${TURNSTILE_ORIGIN}` : "connect-src 'self'",
       "style-src 'self'"
     ].join('; '));
@@ -232,12 +236,19 @@ function createApp(overrides = {}) {
 
   staticFile('/style.css', 'style.css', 'text/css');
   staticFile('/client.js', 'client.js', 'application/javascript');
+  staticFile('/home-layout-client.js', 'home-layout-client.js', 'application/javascript');
+  staticFile('/editor.js', 'editor.js', 'application/javascript');
+  staticFile('/news-editor.js', 'news-editor.js', 'application/javascript');
   staticFile(['/chikki.ico', '/favicon.ico'], 'chikki.ico', 'image/x-icon', 'public, max-age=86400');
 
-  app.get('/custom.css', (request, response) => {
+  app.get('/custom.css', async (request, response) => {
+    await store.ready;
+    const customization = await service.publicCustomization();
+    const boards = await service.publicBoards();
+    const publicRenderer = new Renderer(config, () => ({ customization, boards }), i18n);
     response.type('text/css');
     response.setHeader('Cache-Control', 'no-cache');
-    response.send(renderer.customStyles());
+    response.send(publicRenderer.customStyles());
   });
 
   app.get('/banner/:filename', (request, response) => {
@@ -270,13 +281,24 @@ function createApp(overrides = {}) {
       return;
     }
     if (delivery.kind === 'redirect') {
-      response.setHeader('Cache-Control', 'no-store');
-      response.redirect(302, delivery.url);
+      if (typeof uploads.storage.readApproved !== 'function') throw httpError(503, 'Private media delivery is unavailable.');
+      const range = String(request.get('range') || '');
+      if (range && !/^bytes=\d*-\d*$/.test(range)) return response.sendStatus(416);
+      const upstream = await uploads.storage.readApproved(request.params.filename, range);
+      response.status(upstream.status).set('Cache-Control', 'private, no-store');
+      response.type(request.params.filename);
+      for (const header of ['content-length', 'content-range', 'accept-ranges']) {
+        if (upstream.headers.get(header)) response.set(header, upstream.headers.get(header));
+      }
+      const stream = Readable.fromWeb(upstream.body);
+      stream.on('error', () => response.destroy());
+      response.on('close', () => stream.destroy());
+      stream.pipe(response);
       return;
     }
     response.type(delivery.mime);
     response.setHeader('Accept-Ranges', 'bytes');
-    response.setHeader('Cache-Control', 'private, no-cache');
+    response.setHeader('Cache-Control', 'private, no-store');
     response.sendFile(delivery.filePath, { acceptRanges: true });
   }
 
@@ -289,6 +311,10 @@ function createApp(overrides = {}) {
 
   app.use(async (request, response, next) => {
     await store.ready;
+    if (request.method === 'GET' && !request.path.startsWith('/admin')) {
+      const [customization, boards] = await Promise.all([service.publicCustomization(), service.publicBoards()]);
+      renderContext.getStore().presentation = { customization, boards };
+    }
     next();
   });
 
@@ -330,7 +356,8 @@ function createApp(overrides = {}) {
       view.boards,
       view.stats,
       view.latestPosts,
-      view.latestImages
+      view.latestImages,
+      view.activeThreads
     ));
   }
 
@@ -344,6 +371,10 @@ function createApp(overrides = {}) {
       } catch {
         response.status(503);
         content = 'This page is temporarily unavailable. Please try again later.';
+      }
+      if (key === 'news') {
+        response.set('Cache-Control', 'no-store');
+        return response.send(renderer.newsPage(content));
       }
       if (key === 'rules') {
         const days = retentionDays(service.getData(), config);
@@ -396,7 +427,9 @@ function createApp(overrides = {}) {
 
   if (config.features.search) {
     app.get('/search', rateLimit('expensiveRead', 'Too many searches. Wait a moment and try again.'), async (request, response) => {
-      const search = await service.publicSearch(request.query.q);
+      const search = await service.publicSearch(request.query.q, request.query.board);
+      response.set('Cache-Control', 'no-store');
+      if (request.query.format === 'json') return response.json({ html: renderer.searchResults(search.query, search.results, search.data) });
       const stats = service.usesTargetedQueries ? await store.siteStats() : service.getSiteStats(search.data);
       response.send(renderer.search(search.query, search.results, search.data, stats));
     });
@@ -564,6 +597,7 @@ function createApp(overrides = {}) {
         }
 
         if (String(request.body.website || '').trim()) throw httpError(400, 'Post rejected.');
+        if (!staffOnly && ['bypass', 'bypassCheck', 'skipVerification'].some(key => request.body[key] !== undefined)) throw httpError(403, 'Verification cannot be bypassed.');
         if (!staffOnly && request.body.capcode !== undefined) {
           throw httpError(403, 'Capcodes require the authenticated staff posting form.');
         }
@@ -901,6 +935,14 @@ function createApp(overrides = {}) {
     ));
   });
 
+  app.get('/admin/customization/branding', requireAdmin, (request, response) => {
+    requirePermission(request, 'site.manage');
+    response.send(renderer.adminBranding(service.getCustomization(), admin.csrf(request.adminSession)));
+  });
+
+  installSiteEditor(app, { config, service, store, renderer, uploads, mediaSafety, admin,
+    requireAdmin, requireCsrf, requirePermission, staffActionContext, staffRateLimit });
+
   app.get('/admin/staff', requireAdmin, (request, response) => {
     requirePermission(request, 'staff.manage');
     const data = service.getData();
@@ -1015,7 +1057,7 @@ function createApp(overrides = {}) {
       .filter(([key]) => key.startsWith('theme_'))
       .map(([key, value]) => [key.slice(6), value]));
     await service.updateCustomization({ ...request.body, theme }, { actor: request.staff });
-    response.redirect(303, '/admin/customization');
+    response.redirect(303, '/admin/customization/branding');
   });
 
   app.post('/admin/customization/pages/add', requireAdmin, async (request, response) => {

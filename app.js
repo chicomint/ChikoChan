@@ -58,6 +58,15 @@ function optionalPositiveInteger(value) {
 
 function createApp(overrides = {}) {
   const config = loadConfig(overrides);
+  const renderContext = new AsyncLocalStorage();
+  const verificationDefaults = { postingAuthorization: config.postingAuthorization.enabled, turnstile: config.antiAbuse.turnstile.enabled };
+  // Keep verification consistent throughout each request, including multipart uploads.
+  for (const [key, target] of [['postingAuthorization', config.postingAuthorization], ['turnstile', config.antiAbuse.turnstile]]) {
+    Object.defineProperty(target, 'enabled', { enumerable: true, get() {
+      const value = renderContext.getStore()?.verification?.[key];
+      return typeof value === 'boolean' ? value : verificationDefaults[key];
+    } });
+  }
   fs.mkdirSync(bannerDirectory(config), { recursive: true });
   const store = overrides.store || (config.storage === 'json' ? new JsonStore(config) : new MongoStore(config));
   store.ready ||= Promise.resolve(store);
@@ -99,7 +108,6 @@ function createApp(overrides = {}) {
   const authorizationNonceStore = createAuthorizationNonceStore(config, store, overrides);
   const postingAuthorization = new PostingAuthorization(config, authorizationNonceStore);
   const nativeCaptcha = new NativeCaptcha(config, authorizationNonceStore);
-  const renderContext = new AsyncLocalStorage();
   renderer.nativeVerification = (board, thread = 0) => {
     if (!nativeCaptcha.enabled) return null;
     const context = renderContext.getStore();
@@ -124,6 +132,22 @@ function createApp(overrides = {}) {
   app.set('env', config.deployment.environment);
   if (config.trustProxy) app.set('trust proxy', config.trustProxy);
 
+  function setContentSecurityPolicy(response) {
+    response.setHeader('Content-Security-Policy', [
+      "default-src 'self'",
+      "base-uri 'none'",
+      "form-action 'self'",
+      "frame-ancestors 'none'",
+      `img-src 'self' data:${publicMediaOrigin ? ` ${publicMediaOrigin}` : ''}`,
+      `media-src 'self'${publicMediaOrigin ? ` ${publicMediaOrigin}` : ''}`,
+      "object-src 'none'",
+      antiAbuse.enabled ? `script-src 'self' ${TURNSTILE_ORIGIN}` : "script-src 'self'",
+      antiAbuse.enabled ? `frame-src 'self' ${TURNSTILE_ORIGIN}` : "frame-src 'self'",
+      antiAbuse.enabled ? `connect-src 'self' ${TURNSTILE_ORIGIN}` : "connect-src 'self'",
+      "style-src 'self'"
+    ].join('; '));
+  }
+
   app.use((request, response, next) => {
     const suppliedRequestId = String(request.get('x-request-id') || '');
     request.id = /^[A-Za-z0-9._-]{8,100}$/.test(suppliedRequestId)
@@ -143,19 +167,7 @@ function createApp(overrides = {}) {
       if (config.security.hsts.preload) hsts.push('preload');
       response.setHeader('Strict-Transport-Security', hsts.join('; '));
     }
-    response.setHeader('Content-Security-Policy', [
-      "default-src 'self'",
-      "base-uri 'none'",
-      "form-action 'self'",
-      "frame-ancestors 'none'",
-      `img-src 'self' data:${publicMediaOrigin ? ` ${publicMediaOrigin}` : ''}`,
-      `media-src 'self'${publicMediaOrigin ? ` ${publicMediaOrigin}` : ''}`,
-      "object-src 'none'",
-      antiAbuse.enabled ? `script-src 'self' ${TURNSTILE_ORIGIN}` : "script-src 'self'",
-      antiAbuse.enabled ? `frame-src 'self' ${TURNSTILE_ORIGIN}` : "frame-src 'self'",
-      antiAbuse.enabled ? `connect-src 'self' ${TURNSTILE_ORIGIN}` : "connect-src 'self'",
-      "style-src 'self'"
-    ].join('; '));
+    setContentSecurityPolicy(response);
     next();
   });
 
@@ -311,8 +323,16 @@ function createApp(overrides = {}) {
 
   app.use(async (request, response, next) => {
     await store.ready;
-    if (request.method === 'GET' && !request.path.startsWith('/admin')) {
-      const [customization, boards] = await Promise.all([service.publicCustomization(), service.publicBoards()]);
+    const customization = await service.publicCustomization();
+    renderContext.getStore().verification = customization.verification;
+    const adminRequest = request.path === '/admin' || request.path.startsWith('/admin/');
+    if (!adminRequest && (
+      (config.postingAuthorization.enabled && config.postingAuthorization.secret.length < 32)
+      || (config.antiAbuse.turnstile.enabled && (!config.antiAbuse.turnstile.siteKey.trim() || !config.antiAbuse.turnstile.secretKey.trim()))
+    )) throw httpError(503, 'Posting verification is unavailable.');
+    setContentSecurityPolicy(response);
+    if (request.method === 'GET' && !adminRequest) {
+      const boards = await service.publicBoards();
       renderContext.getStore().presentation = { customization, boards };
     }
     next();
@@ -848,6 +868,21 @@ function createApp(overrides = {}) {
       admin.csrf(request.adminSession),
       request.staff
     ));
+  });
+
+  app.get('/admin/verification', requireAdmin, (request, response) => {
+    requirePermission(request, 'site.manage');
+    if (request.staff.scope !== 'global') throw httpError(403, 'Only global administrators can change posting verification.');
+    response.send(renderer.adminVerification(renderContext.getStore().verification, verificationDefaults,
+      admin.csrf(request.adminSession), request.query.saved === '1'));
+  });
+
+  app.post('/admin/verification', requireAdmin, staffRateLimit('apiMutation'), async (request, response) => {
+    requirePermission(request, 'site.manage');
+    requireCsrf(request);
+    if (request.staff.scope !== 'global') throw httpError(403, 'Only global administrators can change posting verification.');
+    await service.updatePostingVerification(request.body, staffActionContext(request));
+    response.redirect(303, '/admin/verification?saved=1');
   });
 
   app.get('/admin/boards', requireAdmin, (request, response) => {

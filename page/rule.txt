@@ -6,12 +6,14 @@
 -Do not harass, threaten, or bully other users.
 -Do not post your own or someone else's private or personal information.
 -No spam or excessive repeated posts.
+-Proxie,vpn,Tor can't be posted or block to posted (Sorry :c but I have to)
 
 # Privacy Policy
-We only store the content of threads and posts, along with the date and time they were posted.
-
-We save your IP address when you make a thread or reply. This helps us deal with spam, abuse, and bans. Only admins can see IPs.
+-We only store the content of threads and posts, along with the date and time they were posted.
+-We save your IP address when you make a thread or reply. This helps us deal with spam, abuse, and bans. Only admins can see IPs.
 They are never shown publicly. The ip only keep for 15 days and it will permanently remove
 IP bans keep the address or range until the ban ends or is lifted. Permanent bans keep it while active.
 
 Privacy questions or deletion requests? [Contact the admin](/contact) with the relevant post links.
+
+-update 11/16/2026

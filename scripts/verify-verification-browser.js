@@ -1,0 +1,81 @@
+'use strict';
+
+// Browser tooling is supplied separately; all application data is disposable.
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { chromium } = require(process.argv[2] || 'playwright');
+const { createApp } = require('../app');
+const { closeApplication } = require('../lib/bootstrap');
+
+async function main() {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'chiko-verification-browser-'));
+  const app = createApp({ storage: 'json', dataDir: directory,
+    adminPassword: 'browser-verification-password', adminSessionSecret: 'browser-verification-session-secret',
+    features: { requireImageForThread: false }, maintenance: { enabled: false },
+    postingAuthorization: { enabled: true, secret: 'browser-verification-authorization-secret' },
+    antiAbuse: { turnstile: { enabled: true, siteKey: 'test-site-key', secretKey: 'test-secret-key' } } });
+  await app.locals.chikochan.store.ready;
+  const server = await new Promise(resolve => { const listener = app.listen(0, '127.0.0.1', () => resolve(listener)); });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const errors = [];
+  let browser;
+  try {
+    browser = await chromium.launch({ headless: true, executablePath: process.argv[3] || undefined });
+    const context = await browser.newContext({ viewport: { width: 1365, height: 950 } });
+    await context.route('https://challenges.cloudflare.com/**', route => route.fulfill({ contentType: 'application/javascript', body: 'window.turnstile={render:function(){return "test";},reset:function(){}};' }));
+    const page = await context.newPage();
+    page.on('pageerror', error => errors.push(error.message));
+    page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+    await page.goto(base + '/admin/login');
+    await page.locator('#admin-password').fill('browser-verification-password');
+    await Promise.all([page.waitForURL('**/admin'), page.getByRole('button', { name: 'Log in', exact: true }).click()]);
+    await page.getByRole('link', { name: 'Posting verification', exact: true }).click();
+    for (const name of ['postingAuthorization', 'turnstile']) await page.locator(`select[name="${name}"]`).selectOption('0');
+    await Promise.all([page.waitForURL('**/admin/verification?saved=1'), page.getByRole('button', { name: 'Save verification settings' }).click()]);
+    assert.match(await page.locator('[role=status]').textContent(), /apply immediately/);
+    assert.match(await page.locator('.admin-panel').textContent(), /Six-digit image verification: Off/);
+    await page.reload();
+    for (const name of ['postingAuthorization', 'turnstile']) assert.equal(await page.locator(`select[name="${name}"]`).inputValue(), '0');
+    await page.locator('.theme-selector').selectOption('miku');
+    await page.screenshot({ path: '/tmp/chikochan-verification-settings.png', fullPage: true });
+    for (const width of [768, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false, `No horizontal overflow at ${width}px`);
+    }
+    await page.goto(base + '/chiko/');
+    assert.equal(await page.locator('.native-verification, [data-turnstile-widget]').count(), 0);
+    await page.locator('#post-form textarea[name=com]').fill('A harmless post after verification was turned off.');
+    await page.locator('#post-form button[type=submit], #post-form input[type=submit]').first().click();
+    await page.waitForURL('**/chiko/thread/*');
+    await page.locator('.postMessage').filter({ hasText: 'A harmless post after verification was turned off.' }).waitFor();
+    await page.goto(base + '/admin/verification');
+    for (const name of ['postingAuthorization', 'turnstile']) await page.locator(`select[name="${name}"]`).selectOption('inherit');
+    await Promise.all([page.waitForURL('**/admin/verification?saved=1'), page.getByRole('button', { name: 'Save verification settings' }).click()]);
+    await page.goto(base + '/chiko/');
+    assert.equal(await page.locator('#post-form .native-verification').count(), 1);
+    assert.equal(await page.locator('#post-form [data-turnstile-widget]').count(), 1);
+
+    const noScript = await browser.newContext({ javaScriptEnabled: false });
+    const plain = await noScript.newPage();
+    await plain.goto(base + '/admin/login');
+    await plain.locator('#admin-password').fill('browser-verification-password');
+    await Promise.all([plain.waitForURL('**/admin'), plain.getByRole('button', { name: 'Log in', exact: true }).click()]);
+    await plain.getByRole('link', { name: 'Posting verification', exact: true }).click();
+    for (const name of ['postingAuthorization', 'turnstile']) await plain.locator(`select[name="${name}"]`).selectOption('0');
+    await Promise.all([plain.waitForURL('**/admin/verification?saved=1'), plain.getByRole('button', { name: 'Save verification settings' }).click()]);
+    await plain.goto(base + '/chiko/');
+    assert.equal(await plain.locator('.native-verification, [data-turnstile-widget]').count(), 0, 'Switches work without JavaScript');
+    assert.deepEqual(errors, [], 'No browser or console errors');
+    console.log('PASS: admin navigation, save/refresh, CAPTCHA removal and restoration, real public posting, JavaScript-off settings, Miku styling, tablet/mobile overflow and console checks.');
+  } finally {
+    await browser?.close();
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
+    await closeApplication(app);
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+main().catch(error => { console.error(error); process.exitCode = 1; });

@@ -10,6 +10,7 @@ const { closeApplication } = require('../lib/bootstrap');
 const { AdminAuth } = require('../lib/admin-auth');
 const { normalizeCustomization } = require('../lib/store');
 const { verifyParsedUpgrade } = require('../scripts/verify-upgrade');
+const { loadConfig } = require('../config');
 
 async function fixture(t, overrides = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'chiko-verification-'));
@@ -119,6 +120,7 @@ test('only global administrators with valid CSRF and origin can change verificat
   for (const invalid of [{ postingAuthorization: 'false', turnstile: '0' }, { turnstile: '0' }, { postingAuthorization: '0', turnstile: 'yes' }]) {
     assert.equal((await f.save(invalid)).status, 400);
   }
+  assert.equal((await f.save({ ...fields, nativeCaptcha: 'false' })).status, 400);
   assert.deepEqual(service.getCustomization().verification, {});
   const account = await service.addStaffAccount({ username: 'admin-test', displayName: 'Admin', password: 'test-staff-password', role: 'admin', scope: 'global' }, root);
   const token = f.auth.createToken({ accountId: account.id, sessionVersion: account.sessionVersion });
@@ -139,4 +141,59 @@ test('missing credentials cannot be enabled and invalid stored fields inherit de
   assert.equal((await f.request('/admin/verification', { headers: { cookie: f.cookie } })).status, 200);
   assert.equal((await f.save({ postingAuthorization: '0', turnstile: '0' })).status, 303, 'Administrators can repair an unavailable setting');
   assert.equal((await f.post({})).status, 201);
+});
+
+test('Cloudflare stays enforced when the six-digit fallback is disabled, including stale challenges', async t => {
+  const f = await fixture(t);
+  const oldForm = await f.request('/chiko/');
+  const oldHTML = await oldForm.text();
+  const token = oldHTML.match(/nativeChallenge=([^"&]+)/)[1];
+  const answer = f.app.locals.chikochan.nativeCaptcha.parse(token).answer;
+  const cookie = oldForm.headers.getSetCookie().find(value => value.startsWith('chikochan_verification=')).split(';')[0];
+  assert.equal((await f.save({ postingAuthorization: '1', turnstile: '1', nativeCaptcha: '0' })).status, 303);
+  let response = await f.request('/chiko/'), html = await response.text();
+  assert.doesNotMatch(html, /native-verification|name="nativeAnswer"|nativeChallenge=/);
+  assert.match(html, /data-turnstile-widget/); assert.match(html, /data-posting-authorization/);
+  assert.match(html, /Enable JavaScript to complete Cloudflare verification/);
+  assert.match(response.headers.get('content-security-policy'), /challenges.cloudflare.com/);
+  const staleAnswer = { board: 'chiko', threadId: '0', nativeAnswer: answer };
+  response = await f.request('/posting-authorizations?nativeChallenge=' + token, {
+    method: 'POST', headers: { cookie, Accept: 'application/json' }, body: new URLSearchParams(staleAnswer)
+  });
+  assert.equal(response.status, 400);
+  assert.match((await response.json()).error, /Human verification failed/, 'An old image answer cannot bypass Cloudflare');
+  assert.equal((await f.post({})).status, 403);
+  response = await f.request('/posting-authorizations', { method: 'POST', headers: { Accept: 'application/json' },
+    body: new URLSearchParams({ board: 'chiko', threadId: '0', 'cf-turnstile-response': 'invalid-token' }) });
+  assert.equal(response.status, 400);
+  response = await f.request('/posting-authorizations', { method: 'POST', headers: { Accept: 'application/json' },
+    body: new URLSearchParams({ board: 'chiko', threadId: '0', 'cf-turnstile-response': 'test-token' }) });
+  assert.equal(response.status, 201);
+  const authorization = (await response.json()).token;
+  const post = () => {
+    const body = new FormData(); body.set('com', 'Verified with Cloudflare, without the numbers.');
+    return f.request('/chiko/post?threadId=0', { method: 'POST', headers: { Accept: 'application/json', Authorization: 'ChikoPost ' + authorization }, body });
+  };
+  assert.equal((await post()).status, 201);
+  assert.equal((await post()).status, 403, 'Posting authorization remains single-use');
+  assert.equal((await f.save({ postingAuthorization: 'inherit', turnstile: 'inherit' })).status, 303);
+  assert.equal(f.app.locals.chikochan.service.getCustomization().verification.nativeCaptcha, false, 'Old admin forms preserve the new fallback setting');
+  await f.restart();
+  html = await (await f.request('/chiko/')).text();
+  assert.doesNotMatch(html, /native-verification|nativeChallenge=/);
+  assert.match(html, /data-turnstile-widget/);
+  const { store } = f.app.locals.chikochan;
+  const converted = verifyParsedUpgrade(store.read(), { maximumCites: 45, defaultBoard: store.defaultBoard });
+  assert.equal(converted.data.customization.verification.nativeCaptcha, false);
+
+  assert.equal((await f.save({ postingAuthorization: '0', turnstile: '1', nativeCaptcha: '0' })).status, 303);
+  const staleBody = new FormData(); staleBody.set('com', 'Test stale image fallback'); staleBody.set('nativeAnswer', answer);
+  response = await f.request('/chiko/post?threadId=0&nativeChallenge=' + token, {
+    method: 'POST', headers: { cookie, Accept: 'application/json' }, body: staleBody
+  });
+  assert.equal(response.status, 400, 'Direct posts must also pass Cloudflare when the number fallback is disabled');
+  assert.equal((await f.post({ 'cf-turnstile-response': 'test-token' })).status, 201);
+  assert.equal((await f.save({ postingAuthorization: 'inherit', turnstile: 'inherit', nativeCaptcha: 'inherit' })).status, 303);
+  assert.match(await (await f.request('/chiko/')).text(), /native-verification/, 'Image fallback can be restored');
+  assert.throws(() => loadConfig({ antiAbuse: { nativeCaptcha: { enabled: 'false' } } }), /nativeCaptcha.enabled/);
 });

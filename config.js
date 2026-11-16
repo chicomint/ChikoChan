@@ -173,6 +173,9 @@ const DEFAULTS = {
     maxRevisionsPerPost: 20
   },
   antiAbuse: {
+    nativeCaptcha: {
+      enabled: true
+    },
     turnstile: {
       enabled: false,
       siteKey: '',
@@ -493,6 +496,9 @@ function loadConfig(overrides = {}) {
   if (!isPlainObject(config.lifecycle)) throw new Error('lifecycle must be an object.');
   if (!isPlainObject(config.antiAbuse) || !isPlainObject(config.antiAbuse.turnstile)) {
     throw new Error('antiAbuse.turnstile must be an object.');
+  }
+  if (!isPlainObject(config.antiAbuse.nativeCaptcha) || typeof config.antiAbuse.nativeCaptcha.enabled !== 'boolean') {
+    throw new Error('antiAbuse.nativeCaptcha.enabled must be true or false.');
   }
   if (!isPlainObject(config.maintenance) || typeof config.maintenance.enabled !== 'boolean') {
     throw new Error('maintenance.enabled must be true or false.');

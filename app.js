@@ -59,9 +59,9 @@ function optionalPositiveInteger(value) {
 function createApp(overrides = {}) {
   const config = loadConfig(overrides);
   const renderContext = new AsyncLocalStorage();
-  const verificationDefaults = { postingAuthorization: config.postingAuthorization.enabled, turnstile: config.antiAbuse.turnstile.enabled };
+  const verificationDefaults = { postingAuthorization: config.postingAuthorization.enabled, turnstile: config.antiAbuse.turnstile.enabled, nativeCaptcha: config.antiAbuse.nativeCaptcha.enabled };
   // Keep verification consistent throughout each request, including multipart uploads.
-  for (const [key, target] of [['postingAuthorization', config.postingAuthorization], ['turnstile', config.antiAbuse.turnstile]]) {
+  for (const [key, target] of [['postingAuthorization', config.postingAuthorization], ['turnstile', config.antiAbuse.turnstile], ['nativeCaptcha', config.antiAbuse.nativeCaptcha]]) {
     Object.defineProperty(target, 'enabled', { enumerable: true, get() {
       const value = renderContext.getStore()?.verification?.[key];
       return typeof value === 'boolean' ? value : verificationDefaults[key];
@@ -529,7 +529,7 @@ function createApp(overrides = {}) {
           throw httpError(404, 'Thread not found.');
         }
       }
-      if (request.query.nativeChallenge && request.body.nativeAnswer) {
+      if (nativeCaptcha.enabled && request.query.nativeChallenge && request.body.nativeAnswer) {
         const challenge = await nativeCaptcha.consume(request, {
           board: board.uri, thread: threadId, addressKey: abuseIdentity(request, 'native-captcha')
         });

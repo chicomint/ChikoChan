@@ -71,14 +71,3 @@ Check the JavaScript files for syntax errors:
 npm run check
 ```
 
-## Maintenance update (schema 17)
-
-This update keeps Express, the JSON/MongoDB repositories, existing staff roles and
-moderation screens, TXT pages, and local/S3-compatible storage. See
-[MAINTENANCE.md](MAINTENANCE.md) for behavior, verification, and deployment notes.
-
-## Homepage editor and media safety update
-
-See [IMPLEMENTATION.md](IMPLEMENTATION.md) for the visual homepage editor, news,
-Miku theme, posting forms, validation results, and the moderation/storage integration
-settings that must be configured before production use.

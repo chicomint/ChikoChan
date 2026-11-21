@@ -95,6 +95,19 @@
   }
 
   function initialize() { document.querySelectorAll('[data-home-layout]').forEach(function (host) { refresh(host); }); }
+  document.addEventListener('click', function (event) {
+    var button = event.target.closest('.home-activeThreads [data-thread-sort]');
+    if (!button || button.getAttribute('aria-pressed') === 'true') return;
+    var section = button.closest('.home-activeThreads');
+    var sort = button.dataset.threadSort;
+    section.querySelectorAll('[data-thread-sort]').forEach(function (control) {
+      control.setAttribute('aria-pressed', String(control === button));
+    });
+    section.querySelectorAll('[data-thread-list]').forEach(function (list) {
+      list.hidden = list.dataset.threadList !== sort;
+    });
+  }, true);
+  document.documentElement.classList.add('home-layout-ready');
   window.ChikoHomeLayout = { refresh: refresh, bounds: function (host) { return latest.get(host) || refresh(host); }, device: device };
   window.addEventListener('resize', initialize);
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initialize);

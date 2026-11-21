@@ -311,7 +311,10 @@ function createApp(overrides = {}) {
     response.type(delivery.mime);
     response.setHeader('Accept-Ranges', 'bytes');
     response.setHeader('Cache-Control', 'private, no-store');
-    response.sendFile(delivery.filePath, { acceptRanges: true });
+    response.sendFile(path.basename(delivery.filePath), {
+      root: path.dirname(delivery.filePath),
+      acceptRanges: true
+    });
   }
 
   app.get('/src/:filename', serveUpload);
@@ -377,7 +380,8 @@ function createApp(overrides = {}) {
       view.stats,
       view.latestPosts,
       view.latestImages,
-      view.activeThreads
+      view.activeThreads,
+      view.recentlyRepliedThreads
     ));
   }
 

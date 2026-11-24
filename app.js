@@ -13,6 +13,7 @@ const { loadConfig } = require('./config');
 const { AdminAuth } = require('./lib/admin-auth');
 const { apiBoards, apiCatalog, apiThread, apiThreads } = require('./lib/api');
 const { BoardService, findPost } = require('./lib/board');
+const { DiscordWebhook } = require('./lib/discord-webhook');
 const { MongoStore } = require('./lib/mongo-store');
 const { MaintenanceRunner } = require('./lib/maintenance');
 const { MediaSafetyService } = require('./lib/media-safety');
@@ -77,6 +78,12 @@ function createApp(overrides = {}) {
   const hooks = new HookRegistry(config, overrides.extensionHooks, { logger: overrides.logger });
   const i18n = new Translator(config, overrides.translations);
   const service = new BoardService(config, store, uploads);
+  const discordWebhook = new DiscordWebhook({
+    readSettings: () => service.discordWebhookSettings(),
+    keyFile: overrides.keyFile,
+    fetchImpl: overrides.discordWebhookFetch,
+    logger: overrides.logger
+  });
   const mediaSafety = new MediaSafetyService(config, service, {
     provider: overrides.knownIllegalMediaProvider,
     gateway: overrides.moderationGateway,
@@ -722,6 +729,10 @@ function createApp(overrides = {}) {
           attachmentCount: media.length
         });
         const location = `${renderer.threadPath(board, result.threadId)}#p${result.id}`;
+        if (result.discord) {
+          const { settings, name, comment } = result.discord;
+          discordWebhook.notify(settings, { boardUri: board.uri, postId: result.id, location, name, comment });
+        }
         if (isJsonRequest(request)) {
           response.status(201).json({ ok: true, id: result.id, threadId: result.threadId, url: location });
         } else {
@@ -898,6 +909,28 @@ function createApp(overrides = {}) {
     if (request.staff.scope !== 'global') throw httpError(403, 'Only global administrators can change posting verification.');
     await service.updatePostingVerification(request.body, staffActionContext(request));
     response.redirect(303, '/admin/verification?saved=1');
+  });
+
+  function requireDiscordWebhookAdmin(request, response, next) {
+    requirePermission(request, 'site.manage');
+    if (request.staff.scope !== 'global') throw httpError(403, 'Only global administrators can change the Discord webhook.');
+    next();
+  }
+
+  app.get('/admin/discord-webhook', requireAdmin, requireDiscordWebhookAdmin, async (request, response) => {
+    const settings = await service.discordWebhookSettings();
+    response.send(renderer.adminDiscordWebhook(
+      Boolean(settings),
+      settings?.siteOrigin || config.deployment.publicOrigin || railwayOrigin,
+      admin.csrf(request.adminSession),
+      request.query.saved === '1'
+    ));
+  });
+
+  app.post('/admin/discord-webhook', requireAdmin, requireDiscordWebhookAdmin, staffRateLimit('apiMutation'), async (request, response) => {
+    requireCsrf(request);
+    await service.saveDiscordWebhook(request.body || {}, staffActionContext(request), overrides.keyFile);
+    response.redirect(303, '/admin/discord-webhook?saved=1');
   });
 
   app.get('/admin/boards', requireAdmin, (request, response) => {

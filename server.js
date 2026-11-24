@@ -6,7 +6,9 @@ let shuttingDown = false;
 let server;
 
 async function start() {
-  bootstrap = await createBootstrap();
+  bootstrap = await createBootstrap({ overrides: {
+    railwayHttpIngress: Boolean(process.env.RAILWAY_SERVICE_ID) && process.env.CHIKO_RAILWAY_HTTP_INGRESS === '1'
+  } });
   if (shuttingDown) {
     await bootstrap.close();
     return;

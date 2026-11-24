@@ -3,6 +3,7 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const { normalizeData, createDefaultBoard } = require('../lib/store');
 
 const BACKUP_FORMAT = 1;
 
@@ -26,6 +27,11 @@ function assertFreshDirectory(directory) {
   }
 }
 
+function writeCleanPosts(source, destination) {
+  const data = normalizeData(JSON.parse(fs.readFileSync(source, 'utf8')), 45, createDefaultBoard({}));
+  fs.writeFileSync(destination, JSON.stringify(data, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
+}
+
 function createLocalBackup(sourceDirectory, destinationDirectory, options = {}) {
   const source = path.resolve(sourceDirectory);
   const destination = path.resolve(destinationDirectory);
@@ -38,7 +44,7 @@ function createLocalBackup(sourceDirectory, destinationDirectory, options = {}) 
   const payload = path.join(destination, 'data');
   fs.mkdirSync(payload, { recursive: true, mode: 0o700 });
   if (fs.lstatSync(sourceFile).isSymbolicLink()) throw new Error('Refusing symbolic-link posts.json.');
-  fs.copyFileSync(sourceFile, path.join(payload, 'posts.json'), fs.constants.COPYFILE_EXCL);
+  writeCleanPosts(sourceFile, path.join(payload, 'posts.json'));
   const settingsFile = path.join(source, 'settings.json');
   if (fs.existsSync(settingsFile)) {
     if (fs.lstatSync(settingsFile).isSymbolicLink()) throw new Error('Refusing symbolic-link settings.json.');
@@ -92,4 +98,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { BACKUP_FORMAT, createLocalBackup, parseArguments, sha256 };
+module.exports = { BACKUP_FORMAT, createLocalBackup, parseArguments, sha256, writeCleanPosts };

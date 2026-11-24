@@ -11,22 +11,19 @@ const path = require('node:path');
 const { bannerDirectory, openBanner } = require('./lib/banners');
 const { loadConfig } = require('./config');
 const { AdminAuth } = require('./lib/admin-auth');
-const { TURNSTILE_ORIGIN, TurnstileAdapter } = require('./lib/anti-abuse');
-const { ClientAddressPolicy } = require('./lib/client-address');
 const { apiBoards, apiCatalog, apiThread, apiThreads } = require('./lib/api');
 const { BoardService, findPost } = require('./lib/board');
 const { MongoStore } = require('./lib/mongo-store');
 const { MaintenanceRunner } = require('./lib/maintenance');
 const { MediaSafetyService } = require('./lib/media-safety');
 const { Renderer } = require('./lib/render');
-const { retainedIp, retentionDays } = require('./lib/ip-policy');
 const { staffCan } = require('./lib/staff');
 const { JsonStore } = require('./lib/store');
 const { HookRegistry } = require('./lib/hooks');
 const { Translator } = require('./lib/i18n');
 const { installSiteEditor } = require('./lib/site-editor');
 const { UploadManager } = require('./lib/uploads');
-const { escapeHTML, escapeXML, httpError } = require('./lib/utils');
+const { escapeHTML, escapeXML, httpError, parseCookies } = require('./lib/utils');
 const { createAuthorizationNonceStore, PostingAuthorization } = require('./lib/posting-authorization');
 const { createRateLimitStore, RateLimiter } = require('./lib/rate-limit');
 
@@ -59,10 +56,11 @@ function optionalPositiveInteger(value) {
 function createApp(overrides = {}) {
   const config = loadConfig(overrides);
   const renderContext = new AsyncLocalStorage();
-  const verificationDefaults = { postingAuthorization: config.postingAuthorization.enabled, turnstile: config.antiAbuse.turnstile.enabled, nativeCaptcha: config.antiAbuse.nativeCaptcha.enabled };
+  const verificationDefaults = { postingAuthorization: config.postingAuthorization.enabled, nativeCaptcha: config.antiAbuse.nativeCaptcha.enabled };
   // Keep verification consistent throughout each request, including multipart uploads.
-  for (const [key, target] of [['postingAuthorization', config.postingAuthorization], ['turnstile', config.antiAbuse.turnstile], ['nativeCaptcha', config.antiAbuse.nativeCaptcha]]) {
+  for (const [key, target] of [['postingAuthorization', config.postingAuthorization], ['nativeCaptcha', config.antiAbuse.nativeCaptcha]]) {
     Object.defineProperty(target, 'enabled', { enumerable: true, get() {
+      if (key === 'postingAuthorization' && config.deployment.isProduction) return true;
       const value = renderContext.getStore()?.verification?.[key];
       return typeof value === 'boolean' ? value : verificationDefaults[key];
     } });
@@ -97,12 +95,7 @@ function createApp(overrides = {}) {
   }
   const renderer = new Renderer(config, () => renderContext.getStore()?.presentation || store.cache || service.getData(), i18n);
   const admin = new AdminAuth(config);
-  const antiAbuse = new TurnstileAdapter(config, {
-    fetchImpl: overrides.turnstileFetch,
-    logger: overrides.logger
-  });
   const maintenance = new MaintenanceRunner(config, store, service, { logger: overrides.logger });
-  const clientAddresses = new ClientAddressPolicy(config);
   const rateLimitStore = createRateLimitStore(config, store, overrides);
   const rateLimiter = new RateLimiter(config, rateLimitStore);
   const authorizationNonceStore = createAuthorizationNonceStore(config, store, overrides);
@@ -112,24 +105,38 @@ function createApp(overrides = {}) {
     if (!nativeCaptcha.enabled) return null;
     const context = renderContext.getStore();
     if (!context) return null;
+    const token = postingAuthorization.parse(postingAuthorization.readToken(context.request));
+    if (context.request.path !== '/posting-authorizations/new' && token?.board === board.uri && token.thread === thread) {
+      context.response.setHeader('Cache-Control', 'private, no-store');
+      return null;
+    }
     context.session ||= nativeCaptcha.session(context.request, context.response);
     const scope = `${board.uri}:${thread}`;
     if (!context.challenges.has(scope)) {
       context.challenges.set(scope, nativeCaptcha.issue({
         board: board.uri, thread, session: context.session,
-        addressKey: abuseIdentity(context.request, 'native-captcha')
       }));
     }
     return context.challenges.get(scope);
   };
   const app = express();
+  const railwayDomain = String(process.env.RAILWAY_PUBLIC_DOMAIN || '').toLowerCase();
+  const railwayOrigin = /^[a-z0-9-]+\.up\.railway\.app$/.test(railwayDomain)
+    ? `https://${railwayDomain}` : '';
+  function expectedOrigin(request) {
+    const host = request.get('host');
+    if (railwayOrigin && host?.toLowerCase() === railwayDomain) return railwayOrigin;
+    return config.deployment.publicOrigin || `${request.protocol}://${host}`;
+  }
+
+  renderer.selectedTheme = () => parseCookies(renderContext.getStore()?.request.headers.cookie || '').chiko_theme;
   app.use((request, response, next) => renderContext.run({ request, response, challenges: new Map() }, next));
   const publicMediaOrigin = config.mediaStorage.backend === 'object'
     ? new URL(config.mediaStorage.object.publicBaseUrl).origin
     : '';
 
   app.disable('x-powered-by');
-  app.set('env', config.deployment.environment);
+  app.set('env', 'production');
   if (config.trustProxy) app.set('trust proxy', config.trustProxy);
 
   function setContentSecurityPolicy(response) {
@@ -141,18 +148,15 @@ function createApp(overrides = {}) {
       `img-src 'self' data:${publicMediaOrigin ? ` ${publicMediaOrigin}` : ''}`,
       `media-src 'self'${publicMediaOrigin ? ` ${publicMediaOrigin}` : ''}`,
       "object-src 'none'",
-      antiAbuse.enabled ? `script-src 'self' ${TURNSTILE_ORIGIN}` : "script-src 'self'",
-      antiAbuse.enabled ? `frame-src 'self' ${TURNSTILE_ORIGIN}` : "frame-src 'self'",
-      antiAbuse.enabled ? `connect-src 'self' ${TURNSTILE_ORIGIN}` : "connect-src 'self'",
+      "script-src 'self'",
+      "frame-src 'self'",
+      "connect-src 'self'",
       "style-src 'self'"
     ].join('; '));
   }
 
   app.use((request, response, next) => {
-    const suppliedRequestId = String(request.get('x-request-id') || '');
-    request.id = /^[A-Za-z0-9._-]{8,100}$/.test(suppliedRequestId)
-      ? suppliedRequestId
-      : crypto.randomUUID();
+    request.id = crypto.randomUUID();
     response.setHeader('X-Request-Id', request.id);
     response.setHeader('X-Content-Type-Options', 'nosniff');
     response.setHeader('X-Frame-Options', 'DENY');
@@ -182,9 +186,7 @@ function createApp(overrides = {}) {
       const origin = String(request.get('origin') || '');
       if (origin) {
         const supplied = new URL(origin);
-        const expected = config.deployment.publicOrigin
-          ? new URL(config.deployment.publicOrigin)
-          : new URL(`${request.protocol}://${request.get('host')}`);
+        const expected = new URL(expectedOrigin(request));
         if (supplied.origin !== expected.origin) throw httpError(403, 'Cross-origin mutation rejected.');
       }
       next();
@@ -232,8 +234,12 @@ function createApp(overrides = {}) {
   app.use('/install', (request, response) => response.redirect(303, '/'));
 
   const standardFormParser = express.urlencoded({ extended: false, limit: '24kb', parameterLimit: 64 });
+  const editorFormParser = express.urlencoded({ extended: false, limit: '512kb', parameterLimit: 24 });
   const staffFormParser = express.urlencoded({ extended: false, limit: '24kb', parameterLimit: 256 });
   app.use((request, response, next) => {
+    if (['/admin/customization/layout', '/admin/news/save', '/admin/news/preview'].includes(request.path)) {
+      return editorFormParser(request, response, next);
+    }
     const parser = request.path.startsWith('/admin/staff') ? staffFormParser : standardFormParser;
     parser(request, response, next);
   });
@@ -311,7 +317,10 @@ function createApp(overrides = {}) {
     response.type(delivery.mime);
     response.setHeader('Accept-Ranges', 'bytes');
     response.setHeader('Cache-Control', 'private, no-store');
-    response.sendFile(delivery.filePath, { acceptRanges: true });
+    response.sendFile(path.basename(delivery.filePath), {
+      root: path.dirname(delivery.filePath),
+      acceptRanges: true
+    });
   }
 
   app.get('/src/:filename', serveUpload);
@@ -323,14 +332,13 @@ function createApp(overrides = {}) {
 
   app.use(async (request, response, next) => {
     await store.ready;
+    await rateLimitStore.prepare?.();
     const customization = await service.publicCustomization();
     renderContext.getStore().verification = customization.verification;
     const adminRequest = request.path === '/admin' || request.path.startsWith('/admin/');
     if (!adminRequest && (
       (config.postingAuthorization.enabled && config.postingAuthorization.secret.length < 32)
-      || (config.antiAbuse.turnstile.enabled && (!config.antiAbuse.turnstile.siteKey.trim() || !config.antiAbuse.turnstile.secretKey.trim()))
     )) throw httpError(503, 'Posting verification is unavailable.');
-    setContentSecurityPolicy(response);
     if (request.method === 'GET' && !adminRequest) {
       const boards = await service.publicBoards();
       renderContext.getStore().presentation = { customization, boards };
@@ -348,7 +356,7 @@ function createApp(overrides = {}) {
       fs.accessSync(config.quarantineDir, fs.constants.R_OK | fs.constants.W_OK);
       await rateLimitStore.healthCheck();
       if (!await uploads.healthCheck()) throw new Error('Media worker queue is not ready.');
-      if (postingAuthorization.enabled) await authorizationNonceStore.healthCheck();
+      if (nativeCaptcha.enabled) await authorizationNonceStore.healthCheck();
       response.json({ status: 'ready' });
     } catch (error) {
       (overrides.logger || console).error('Readiness check failed. Check database and media storage access.');
@@ -377,7 +385,9 @@ function createApp(overrides = {}) {
       view.stats,
       view.latestPosts,
       view.latestImages,
-      view.activeThreads
+      view.activeThreads,
+      view.recentlyRepliedThreads,
+      request.query.sort
     ));
   }
 
@@ -395,10 +405,6 @@ function createApp(overrides = {}) {
       if (key === 'news') {
         response.set('Cache-Control', 'no-store');
         return response.send(renderer.newsPage(content));
-      }
-      if (key === 'rules') {
-        const days = retentionDays(service.getData(), config);
-        content = content.replaceAll('{{IP_RETENTION}}', days === 0 ? 'forever (until the administrator changes this policy)' : `${days} days`);
       }
       response.set('Cache-Control', 'no-store');
       response.send(renderer.page(key, { ...page, content }));
@@ -420,7 +426,7 @@ function createApp(overrides = {}) {
   async function renderThread(request, response, boardId = '') {
     const view = await service.publicThread(request.params.id, boardId);
     if (!view) throw httpError(404, 'Thread not found.');
-    response.send(renderer.thread(view.thread, view.data, view.board, view.stats));
+    response.send(renderer.thread(view.thread, view.data, view.board, view.stats, request.query.quote));
   }
 
   app.get('/thread/:id', (request, response) => renderThread(request, response));
@@ -428,7 +434,7 @@ function createApp(overrides = {}) {
   app.get('/catalog', async (request, response) => {
     const board = await service.publicDefaultBoard();
     if (!board) throw httpError(404, 'Board not found.');
-    const view = await service.publicCatalog(board, request.query.page);
+    const view = await service.publicCatalog(board, request.query.page, request.query);
     response.send(renderer.catalog(view.data, view.threads, board, view.stats, view));
   });
 
@@ -451,7 +457,7 @@ function createApp(overrides = {}) {
       response.set('Cache-Control', 'no-store');
       if (request.query.format === 'json') return response.json({ html: renderer.searchResults(search.query, search.results, search.data) });
       const stats = service.usesTargetedQueries ? await store.siteStats() : service.getSiteStats(search.data);
-      response.send(renderer.search(search.query, search.results, search.data, stats));
+      response.send(renderer.search(search.query, search.results, search.data, stats, request.query.board));
     });
   }
 
@@ -468,16 +474,24 @@ function createApp(overrides = {}) {
 
   installPreferences(app, config, store, { keyFile: overrides.keyFile, limit: rateLimit('apiMutation') });
 
-  app.get('/robots.txt', (request, response) => response.type('text/plain').send('User-agent: *\nDisallow: /admin\n'));
+  app.post('/theme', (request, response) => {
+    const theme = request.body.theme;
+    if (!['site', 'light', 'dark', 'yotsuba-b', 'miku'].includes(theme)) throw httpError(400, 'Choose a theme.');
+    response.cookie('chiko_theme', theme, { maxAge: 31536000000, sameSite: 'lax', secure: request.secure });
+    let returnTo = '/';
+    try {
+      const referer = new URL(request.get('referer'));
+      returnTo = safeRedirect(referer.pathname + referer.search, '/');
+    } catch { /* Direct form submissions return to the homepage. */ }
+    response.redirect(303, returnTo);
+  });
 
-  function abuseIdentity(request, purpose) {
-    return clientAddresses.fingerprint(request, purpose);
-  }
+  app.get('/robots.txt', (request, response) => response.type('text/plain').send('User-agent: *\nDisallow: /admin\n'));
 
   function rateLimit(operation, message) {
     return rateLimiter.middleware(
       operation,
-      request => abuseIdentity(request, `rate:${operation}`),
+      () => 'site',
       message
     );
   }
@@ -485,14 +499,14 @@ function createApp(overrides = {}) {
   function staffRateLimit(operation, message) {
     return rateLimiter.middleware(
       operation,
-      request => request.staff?.id || abuseIdentity(request, `rate:${operation}`),
+      request => request.staff?.id || 'site',
       message
     );
   }
 
   async function postRateLimit(request, response, next) {
     const operation = Number(request.query.threadId) > 0 ? 'replyCreate' : 'threadCreate';
-    return rateLimit(operation, 'Too many posts from this address. Wait a moment and try again.')(request, response, next);
+    return rateLimit(operation, 'Too many posts. Wait a moment and try again.')(request, response, next);
   }
 
   app.get('/posting-authorizations/new', async (request, response) => {
@@ -531,14 +545,13 @@ function createApp(overrides = {}) {
       }
       if (nativeCaptcha.enabled && request.query.nativeChallenge && request.body.nativeAnswer) {
         const challenge = await nativeCaptcha.consume(request, {
-          board: board.uri, thread: threadId, addressKey: abuseIdentity(request, 'native-captcha')
+          board: board.uri, thread: threadId
         });
         nativeCaptcha.verify(challenge, request.body.nativeAnswer);
-      } else await antiAbuse.verify(request.body['cf-turnstile-response']);
+      } else if (nativeCaptcha.enabled) throw httpError(403, 'Image verification is required. Reload the form and try again.');
       const authorization = await postingAuthorization.issue({
         boardUri: board.uri,
-        threadId,
-        addressKey: abuseIdentity(request, 'posting-authorization')
+        threadId
       });
       postingAuthorization.setCookie(request, response, authorization.token);
       response.setHeader('Cache-Control', 'no-store');
@@ -555,15 +568,13 @@ function createApp(overrides = {}) {
   );
 
   async function requirePostingAuthorization(request, response, next) {
-    if (nativeCaptcha.enabled && request.query.nativeChallenge
-      && !postingAuthorization.parse(postingAuthorization.readToken(request))) {
+    if (nativeCaptcha.enabled && request.query.nativeChallenge) {
       try {
-        await rateLimiter.consume('captchaAuthorization', abuseIdentity(request, 'rate:captchaAuthorization'),
+        await rateLimiter.consume('captchaAuthorization', 'site',
           'Too many verification attempts. Try again later.');
         request.nativeChallenge = await nativeCaptcha.consume(request, {
           board: String(request.params.boardUri || request.query.board || '').toLowerCase(),
-          thread: optionalPositiveInteger(request.query.threadId === '0' ? undefined : request.query.threadId) || 0,
-          addressKey: abuseIdentity(request, 'native-captcha')
+          thread: optionalPositiveInteger(request.query.threadId === '0' ? undefined : request.query.threadId) || 0
         });
         request.verifyUploadAuthorization = () => nativeCaptcha.verify(request.nativeChallenge, request.body.nativeAnswer);
         next();
@@ -571,6 +582,7 @@ function createApp(overrides = {}) {
       return;
     }
     if (!postingAuthorization.enabled) {
+      if (nativeCaptcha.enabled) throw httpError(403, 'Image verification is required. Reload the form and try again.');
       next();
       return;
     }
@@ -580,8 +592,7 @@ function createApp(overrides = {}) {
     const threadId = Number(rawThreadId);
     const authorization = await postingAuthorization.consume(request, {
       boardUri,
-      threadId,
-      addressKey: abuseIdentity(request, 'posting-authorization')
+      threadId
     });
     postingAuthorization.clearCookie(request, response);
     if (!authorization) throw httpError(403, 'Posting authorization is invalid, expired, or already used.');
@@ -627,8 +638,6 @@ function createApp(overrides = {}) {
         }
         if (!staffOnly && request.nativeChallenge) {
           nativeCaptcha.verify(request.nativeChallenge, request.body.nativeAnswer);
-        } else if (!staffOnly && !postingAuthorization.enabled) {
-          await antiAbuse.verify(request.body['cf-turnstile-response']);
         }
 
         const rawThread = request.body.threadId ?? request.body.resto ?? '0';
@@ -645,8 +654,8 @@ function createApp(overrides = {}) {
         if (!staffOnly && files.length) {
           await rateLimiter.consume(
             'mediaPost',
-            abuseIdentity(request, 'rate:mediaPost'),
-            'Too many media posts from this address. Try again later.'
+            'site',
+            'Too many media posts. Try again later.'
           );
         }
 
@@ -694,8 +703,6 @@ function createApp(overrides = {}) {
           ? request.body.capcode
           : [request.body.capcode];
         const context = {
-          clientKey: abuseIdentity(request, 'poster'),
-          address: clientAddresses.address(request),
           ...(staffOnly ? {
             actor: request.staff,
             capcode: capcodeValues.includes('1')
@@ -732,9 +739,18 @@ function createApp(overrides = {}) {
   app.post('/reply', postRateLimit, requirePostingAuthorization, uploads.middleware, postHandler(true));
 
   app.post('/delete', rateLimit('deletePassword', 'Too many deletion attempts. Try again later.'), async (request, response) => {
-    const result = await service.deleteByPassword(request.body.postIds, request.body.password || request.body.pwd, Boolean(request.body.fileOnly));
+    const result = await service.deleteByPassword(request.body.postIds, request.body.password || request.body.pwd, request.body.fileOnly === '1');
     if (isJsonRequest(request)) response.json({ ok: true, ...result });
-    else response.redirect(303, safeRedirect(request.body.redirectTo, '/'));
+    else {
+      const returnTo = safeRedirect(request.body.redirectTo, '/');
+      response.redirect(303, `/delete/success?returnTo=${encodeURIComponent(returnTo)}&files=${result.fileOnly ? '1' : '0'}`);
+    }
+  });
+
+  app.get('/delete/success', (request, response) => {
+    response.send(renderer.message('Deletion complete', request.query.files === '1'
+      ? 'Attachments were removed from the selected posts.' : 'The selected posts were deleted.',
+    { line: '' }, safeRedirect(request.query.returnTo, '/')));
   });
 
   app.get('/report/success', (request, response) => {
@@ -742,10 +758,9 @@ function createApp(overrides = {}) {
       service.getSiteStats(), safeRedirect(request.query.returnTo, '/')));
   });
 
-  app.post('/report', rateLimit('reportCreate', 'Too many reports from this address. Try again later.'), async (request, response) => {
+  app.post('/report', rateLimit('reportCreate', 'Too many reports. Try again later.'), async (request, response) => {
     const report = await service.reportPost(request.body.postId, request.body.reason, {
-      category: request.body.category,
-      clientKey: abuseIdentity(request, 'reporter')
+      category: request.body.category
     });
     hooks.notify('reportCreated', {
       reportId: report.id,
@@ -842,7 +857,7 @@ function createApp(overrides = {}) {
     if (!admin.configured) throw httpError(404, 'Not found.');
     await rateLimiter.consume(
       'adminLogin',
-      abuseIdentity(request, 'rate:adminLogin'),
+      'site',
       'Too many login attempts. Try again later.'
     );
     const username = String(request.body.username || '').trim();
@@ -964,6 +979,10 @@ function createApp(overrides = {}) {
 
   app.get('/admin/customization', requireAdmin, (request, response) => {
     requirePermission(request, 'site.manage');
+    if (request.query.editor === 'form') {
+      return response.send(renderer.adminLayoutForm(service.getCustomization(), admin.csrf(request.adminSession),
+        request.query.saved === '1', request.query.asset));
+    }
     response.send(renderer.adminCustomization(
       service.getCustomization(),
       admin.csrf(request.adminSession)
@@ -1045,18 +1064,6 @@ function createApp(overrides = {}) {
       attachmentId: request.body.attachmentId,
       reason: request.body.reason
     });
-    response.redirect(303, '/admin');
-  });
-
-  app.get('/admin/post-ip/:id', requireAdmin, (request, response) => {
-    const target = targetForPost(request.params.id);
-    requirePermission(request, 'ips.view', target.thread.boardId);
-    response.json({ ip: retainedIp(target.post, service.getData(), config) || '', available: Boolean(retainedIp(target.post, service.getData(), config)) });
-  });
-
-  app.post('/admin/ip-retention', requireAdmin, async (request, response) => {
-    requireCsrf(request);
-    await service.updateIpRetention(request.body.customDays || request.body.days, staffActionContext(request));
     response.redirect(303, '/admin');
   });
 
@@ -1168,17 +1175,6 @@ function createApp(overrides = {}) {
     response.redirect(303, '/admin/reports?status=closed');
   });
 
-  app.post('/admin/ban', requireAdmin, async (request, response) => {
-    requireCsrf(request);
-    const allowedDurations = new Set([0, 3600000, 21600000, 86400000, 259200000, 604800000, 2592000000]);
-    const duration = Number(request.body.duration);
-    if (!allowedDurations.has(duration)) throw httpError(400, 'Invalid ban duration.');
-    const target = targetForPost(request.body.postId);
-    requirePermission(request, 'bans.manage', target.thread.boardId);
-    await service.banPost(request.body.postId, duration, request.body.reason, { actor: request.staff });
-    response.redirect(303, '/admin');
-  });
-
   app.post('/admin/sanction', requireAdmin, async (request, response) => {
     requireCsrf(request);
     const allowedDurations = new Set([0, 3600000, 21600000, 86400000, 259200000, 604800000, 2592000000]);
@@ -1192,7 +1188,6 @@ function createApp(overrides = {}) {
     await service.sanctionPost(request.body.postId, {
       kind: request.body.kind,
       target: request.body.target,
-      ipNetwork: request.body.ipNetwork,
       scope: request.body.scope,
       fileHash: request.body.fileHash,
       durationMs: duration,
@@ -1272,7 +1267,6 @@ function createApp(overrides = {}) {
         requireImageForThread: optionalBoolean(request.body.requireImageForThread),
         allowVideoUploads: optionalBoolean(request.body.allowVideoUploads),
         allowSpoilers: optionalBoolean(request.body.allowSpoilers),
-        showPosterIds: optionalBoolean(request.body.showPosterIds),
         allowSage: optionalBoolean(request.body.allowSage),
         rejectDuplicateImages: optionalBoolean(request.body.rejectDuplicateImages),
         maxThreads: optionalPositiveInteger(request.body.maxThreads),
@@ -1458,11 +1452,11 @@ function createApp(overrides = {}) {
       apiResponse(response, request.board.rules.map(rule => rule.text));
     });
     app.get('/:boardUri/catalog.json', async (request, response) => {
-      const view = await service.publicCatalog(request.board, request.query.page);
+      const view = await service.publicCatalog(request.board, request.query.page, request.query);
       apiResponse(response, apiCatalog(service, view.data, request.board));
     });
     app.get('/:boardUri/threads.json', async (request, response) => {
-      const view = await service.publicCatalog(request.board, request.query.page);
+      const view = await service.publicCatalog(request.board, request.query.page, request.query);
       apiResponse(response, apiThreads(service, view.data, request.board));
     });
     app.get('/:boardUri/archive.json', async (request, response) => {
@@ -1496,7 +1490,7 @@ function createApp(overrides = {}) {
 
   app.get(['/:boardUri/', '/:boardUri/index.html'], (request, response) => renderBoardPage(request.board, 1, response));
   app.get(['/:boardUri/catalog', '/:boardUri/catalog.html'], async (request, response) => {
-    const view = await service.publicCatalog(request.board, request.query.page);
+    const view = await service.publicCatalog(request.board, request.query.page, request.query);
     response.send(renderer.catalog(view.data, view.threads, request.board, view.stats, view));
   });
   app.get(['/:boardUri/archive', '/:boardUri/archive.html'], async (request, response) => {
@@ -1518,7 +1512,7 @@ function createApp(overrides = {}) {
 
   app.use((error, request, response, next) => {
     if (response.headersSent) {
-      next(error);
+      response.destroy();
       return;
     }
     const isTooLarge = error.code === 'LIMIT_FILE_SIZE';
@@ -1535,7 +1529,6 @@ function createApp(overrides = {}) {
         category: 'request-failure',
         requestId: request.id,
         method: request.method,
-        path: request.path,
         status,
         error: 'Request could not complete'
       }));
@@ -1550,7 +1543,7 @@ function createApp(overrides = {}) {
       (() => {
         try {
           const referer = new URL(request.get('referer'));
-          const origin = config.deployment.publicOrigin || `${request.protocol}://${request.get('host')}`;
+          const origin = expectedOrigin(request);
           return referer.origin === new URL(origin).origin ? safeRedirect(referer.pathname + referer.search, '/') : '/';
         } catch { return '/'; }
       })(),
@@ -1566,9 +1559,7 @@ function createApp(overrides = {}) {
     service,
     renderer,
     i18n,
-    antiAbuse,
     mediaSafety,
-    clientAddresses,
     rateLimiter,
     rateLimitStore,
     postingAuthorization,

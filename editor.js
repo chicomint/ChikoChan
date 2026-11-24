@@ -408,5 +408,7 @@
   window.addEventListener('beforeunload', function (event) { if (dirty) { event.preventDefault(); event.returnValue = ''; } });
   document.addEventListener('change', function (event) { if (event.target.matches('.theme-selector')) setTimeout(renderPreview, 0); });
   window.addEventListener('resize', resizeCanvas);
+  root.hidden = false;
+  frame.src = frame.dataset.src;
   versions(); select(selected);
 }());

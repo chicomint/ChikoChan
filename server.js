@@ -41,7 +41,7 @@ function shutdown(signal) {
     clearTimeout(forceClose);
     await bootstrap.close();
     if (error) {
-      console.error(error);
+      console.error('The HTTP server did not close cleanly.');
       process.exitCode = 1;
     }
   });

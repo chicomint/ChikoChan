@@ -2,7 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { BACKUP_FORMAT, sha256 } = require('./backup-local');
+const { BACKUP_FORMAT, sha256, writeCleanPosts } = require('./backup-local');
 
 function safeRelativePath(value) {
   const normalized = String(value || '');
@@ -36,7 +36,8 @@ function restoreLocalBackup(backupDirectory, targetDirectory) {
     const source = path.join(backup, 'data', ...entry.path.split('/'));
     const destination = path.join(target, ...entry.path.split('/'));
     fs.mkdirSync(path.dirname(destination), { recursive: true, mode: 0o700 });
-    fs.copyFileSync(source, destination, fs.constants.COPYFILE_EXCL);
+    if (entry.path === 'posts.json') writeCleanPosts(source, destination);
+    else fs.copyFileSync(source, destination, fs.constants.COPYFILE_EXCL);
     fs.chmodSync(destination, 0o600);
   }
   return manifest;

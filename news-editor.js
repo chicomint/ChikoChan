@@ -61,4 +61,5 @@
     } catch (error) { notify(error.message); } finally { input.disabled = false; input.value = ''; }
   });
   drawList(); load();
+  root.hidden = false;
 }());

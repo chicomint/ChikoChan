@@ -48,7 +48,7 @@ async function main() {
   }
   if (!config.mongoUrl) throw new Error('Configure a MongoDB DATABASE_URL before running the migration.');
   if (!fs.existsSync(backupPath)) {
-    fs.copyFileSync(sourcePath, backupPath, fs.constants.COPYFILE_EXCL);
+    fs.writeFileSync(backupPath, JSON.stringify(data, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
     console.log(`Backup created: ${backupPath}`);
   } else {
     console.log(`Backup already exists: ${backupPath}`);

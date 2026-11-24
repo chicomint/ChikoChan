@@ -1,11 +1,16 @@
+#What happened??????? — 11/24/26
+
+Sorry for disappearing for a while, but we are back! there is something really hit me off, I'm really sad about it. But I'm feeling much better now!
+
+Someone concerns about the site storing IP addresses, so I decided to make the site free ip from now on, the site will no longer store your IP addresses. I also updated the Privacy Policy, which you can check on the Rules page. now I have to find another way to deal with spam ig T^T
+
+I'm cleaned up the database removed all previous IP logs also added two new boards: /a/!
+
+Anyway... thank you for sticking around and supporting the site. It really means a lot to me.
+
+I luv u all!! ♡
 #update a lot - 11/16/2026
 yea idk what I'm I even add
-#We update Privacy Policy - 11/15/2026
-Now we save your IP address when you make a thread or reply. This helps to deal with spam, abuse, and bans. Only admins can see IPs.
-They are never shown publicly. The ip only keep for 15 days and it will permanently remove
-IP bans keep the address or range until the ban ends or is lifted. Permanent bans keep it while active.
-
-I hope you guys understand c:
 #Fix ui again - 11/3/26
 # What happened recently? - 10/28/26
 We recently moved to Lychan and tried editing the code to make it look like ChikoChan, but ended up with a lot of issues and it's pretty hard for us to fix.

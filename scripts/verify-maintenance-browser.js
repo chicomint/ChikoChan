@@ -24,7 +24,7 @@ async function main() {
   const base = `http://127.0.0.1:${server.address().port}`;
   let browser;
   try {
-    browser = await chromium.launch({ headless: true });
+    browser = await chromium.launch({ headless: true, executablePath: process.argv[3] });
     for (const width of [1280, 390]) {
       const context = await browser.newContext({ viewport: { width, height: 900 } });
       await context.addInitScript(() => {
@@ -57,12 +57,10 @@ async function main() {
       await page.goto(base + '/admin/login');
       await page.locator('[name="password"]').fill('browser-admin-password');
       await Promise.all([page.waitForURL('**/admin'), page.getByRole('button', { name: 'Log in', exact: true }).click()]);
-      await page.waitForSelector('.admin-post-summary .staff-ip');
-      const ipControl = page.locator(`.staff-ip[data-post-id="${seed.id}"]`);
-      assert.equal(await ipControl.textContent(), 'IP: •••');
-      await ipControl.focus();
-      await page.waitForFunction(id => document.querySelector(`.staff-ip[data-post-id="${id}"]`).textContent === '2001:db8::12', seed.id);
-      assert.ok(!(await page.content()).includes('posterIp'));
+      await page.waitForSelector('.admin-post-summary');
+      assert.equal(await page.locator('.staff-ip').count(), 0);
+      assert.ok(!(await page.content()).includes('2001:db8::12'));
+      assert.equal((await context.request.get(base + '/admin/post-ip/' + seed.id)).status(), 404);
       await page.goto(`${base}/${board.uri}/thread/${seed.id}`);
       assert.equal(await page.locator('.staff-ip').count(), 0, 'No IP controls on public thread, even for admin');
       assert.ok(!(await page.content()).includes('2001:db8::12'));
@@ -87,7 +85,7 @@ async function main() {
       await page.goto(`${base}/${board.uri}/`);
       assert.equal(await page.locator('#post-form [name="name"]').inputValue(), '');
       assert.deepEqual(errors, []);
-      console.log(`PASS ${width}px: theme before visible frames, refresh/new tab, staff IP focus, remembered/edited/anonymous name`);
+      console.log(`PASS ${width}px: theme before visible frames, refresh/new tab, absence of staff IP controls, remembered/edited/anonymous name`);
       await context.close();
     }
   } finally {

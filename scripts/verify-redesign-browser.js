@@ -17,10 +17,7 @@ async function main() {
   const keyFile = path.join(directory, 'key'); encryptionKey(keyFile, true);
   const app = createApp({ storage: 'json', dataDir: directory, keyFile,
     adminPassword: 'browser-admin-password', adminSessionSecret: 'browser-admin-session-secret',
-    features: { requireImageForThread: false }, limits: { postRateLimit: 100 },
-    postingAuthorization: { enabled: true, secret: 'redesign-browser-posting-authorization-test-secret' },
-    antiAbuse: { turnstile: { enabled: true, siteKey: 'test-key', secretKey: 'test-secret' } },
-    turnstileFetch: async (_url, options) => ({ ok: true, text: async () => JSON.stringify({ success: options.body.get('response') === 'browser-test-token', action: 'post', hostname: 'localhost' }) }) });
+    features: { requireImageForThread: false }, limits: { postRateLimit: 100 } });
   const { service, store } = app.locals.chikochan;
   await store.ready;
   const board = service.getDefaultBoard();
@@ -38,7 +35,6 @@ async function main() {
   try {
     browser = await chromium.launch({ headless: true, executablePath: process.argv[3] || undefined });
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
-    await context.route('https://challenges.cloudflare.com/**', route => route.fulfill({ contentType: 'application/javascript', body: `window.turnstile={render:function(el){var input=document.createElement('input');input.type='hidden';input.name='cf-turnstile-response';input.value='browser-test-token';el.appendChild(input);return 'test';},reset:function(){}};` }));
     const page = await context.newPage(); page.setDefaultTimeout(12000);
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));

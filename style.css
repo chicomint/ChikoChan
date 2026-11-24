@@ -200,17 +200,6 @@ header p {
   padding: 2px 4px;
 }
 
-.turnstile-widget {
-  color: var(--muted-text);
-  font-size: 11px;
-  max-width: 300px;
-  min-height: 22px;
-}
-
-.turnstile-widget iframe {
-  max-width: 100%;
-}
-
 .captcha-noscript {
   color: var(--link-hover-color);
   margin: 3px 0;
@@ -637,7 +626,7 @@ blockquote.comment {
 
 /* Header Reply links open this existing form; native links go to the open
    thread form when JavaScript is unavailable. No duplicate bottom control. */
-.reply-form-container:not([open]) {
+.threads-container:not(.single-thread-page) .reply-form-container:not([open]) {
   display: none;
 }
 
@@ -1238,6 +1227,10 @@ blockquote.comment {
   position: absolute;
   top: calc(100% + 2px);
   z-index: 20;
+}
+
+.post-menu-panel:has(.report-control[open]) {
+  position: static;
 }
 
 .post-menu-panel > a,
@@ -2840,7 +2833,6 @@ body[data-board] > .announcement {
   .nameBlock, .subject { overflow-wrap: anywhere; min-width: 0; }
 }
 
-.staff-ip { font: inherit; margin-left: .5em; min-width: 5em; overflow-wrap: anywhere; }
 .admin-ban-form input { max-width: 100%; }
 
 /* Shared chrome, editable homepage and classic news. */
@@ -2885,12 +2877,12 @@ input, select, textarea { accent-color: var(--name-color); }
 .home-news-item p { margin: 4px 0; }
 .home-news time { margin-left: 8px; color: var(--muted-text); font-size: 11px; }
 .all-news { display: inline-block; font-size: 12px; margin-top: 8px; }
-.home-activeThreads .overboard-thread { background: transparent; padding: 9px 0; margin: 0; border: 0; border-bottom: 1px dotted var(--form-border); border-radius: 0; box-shadow: none; }
+.home-activeThreads .overboard-thread { background: transparent; gap: 12px; padding: 12px 0; margin: 0; border: 0; border-bottom: 1px dotted var(--form-border); border-radius: 0; box-shadow: none; }
 .home-activeThreads .overboard-thread:last-child { border-bottom: 0; }
-.home-activeThreads .overboard-thumb-link { flex: 0 0 58px; }
-.home-activeThreads .overboard-thumb { max-width: 58px; max-height: 58px; }
-.home-activeThreads .overboard-preview { font-size: 12px; margin: 4px 0; }
-.home-activeThreads .overboard-thread-meta { font-size: 12px; }
+.home-activeThreads .overboard-thumb-link { flex: 0 0 70px; }
+.home-activeThreads .overboard-thumb { max-width: 70px; max-height: 70px; }
+.home-activeThreads .overboard-preview { font-size: clamp(14px, .85em, 17px); line-height: 1.45; margin: 4px 0 0; }
+.home-activeThreads .overboard-thread-meta { font-size: clamp(13px, .8em, 16px); }
 .home-boards .board-categories { grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr)); gap: 15px; }
 .board-category h3 { color: var(--board-title-color); font-size: 14px; }
 .home-latestImages .latest-images-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
@@ -3094,7 +3086,23 @@ html[data-theme="miku"] .post-form-table input, html[data-theme="miku"] .post-fo
   .home-section>.section-content { padding: 12px; }
   .home-banner>.section-content { padding: 0; }
 }
-.home-activeThreads>.section-heading { border-radius: 3px 3px 0 0; padding: .55em .8em; }
+.home-activeThreads>.section-heading { flex-wrap: wrap; gap: 8px 12px; padding: .55em .8em; }
+.home-activeThreads>.section-heading h2 { font: inherit; margin: 0; }
+.active-thread-sort { display: inline-flex; margin-left: auto; max-width: 100%; }
+.home-activeThreads .active-thread-sort a[data-thread-sort] {
+  background: var(--form-bg);
+  border: 1px solid var(--reply-border);
+  border-radius: 0;
+  color: var(--text-color);
+  font-size: 13px;
+  min-height: 28px;
+  padding: 4px 8px;
+}
+.home-activeThreads .active-thread-sort a:first-child { border-radius: 3px 0 0 3px; }
+.home-activeThreads .active-thread-sort a:last-child { border-left: 0; border-radius: 0 3px 3px 0; }
+.active-thread-sort a[data-thread-sort][aria-current="true"] { background: var(--button-bg); font-weight: bold; }
+.active-thread-sort a[data-thread-sort]:hover { text-decoration: underline; }
+.active-thread-sort a:focus-visible { position: relative; }
 .home-activeThreads>.section-content { padding: 1em; }
 
 /* Original GitHub navbar: centered bracketed links, theme on the right.
@@ -3109,9 +3117,18 @@ html[data-theme="miku"] .post-form-table input, html[data-theme="miku"] .post-fo
   position: sticky;
   top: 0;
   z-index: 1000;
-  background: var(--panel-header-bg);
   box-shadow: none;
   font-size: 11px;
+}
+.utility-nav::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: var(--panel-header-bg);
+  border-radius: inherit;
+  opacity: .82;
+  pointer-events: none;
 }
 .utility-links {
   display: flex;
@@ -3190,3 +3207,8 @@ html[data-theme="miku"] .post-form-table input, html[data-theme="miku"] .post-fo
 .editor-snap-guide.snap-vertical { width: 1px; top: 0; bottom: 0; }
 
 .editor-left>[data-select-page-background], .editor-left>[data-select-navigation] { display: block; margin-bottom: 7px; }
+
+html:not(.js-enabled) .post-hide-button,
+html:not(.js-enabled) .media-spoiler-button {
+  display: none;
+}

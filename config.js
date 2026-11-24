@@ -39,10 +39,6 @@ const DEFAULTS = {
     issuer: 'ChikoChan',
     encryptionKey: ''
   },
-  privacy: {
-    ipRetentionDays: 30,
-    abuseFingerprintSecret: ''
-  },
   postingAuthorization: {
     enabled: false,
     secret: '',
@@ -61,22 +57,23 @@ const DEFAULTS = {
     redisUrl: '',
     prefix: 'chikochan',
     operations: {
-      threadCreate: { windowMs: 10 * 60 * 1000, limit: 3 },
-      replyCreate: { windowMs: 60 * 1000, limit: 8 },
-      mediaPost: { windowMs: 10 * 60 * 1000, limit: 8 },
-      reportCreate: { windowMs: 10 * 60 * 1000, limit: 5 },
-      deletePassword: { windowMs: 15 * 60 * 1000, limit: 10 },
+      threadCreate: { windowMs: 10 * 60 * 1000, limit: 60 },
+      replyCreate: { windowMs: 60 * 1000, limit: 120 },
+      mediaPost: { windowMs: 10 * 60 * 1000, limit: 120 },
+      reportCreate: { windowMs: 10 * 60 * 1000, limit: 60 },
+      deletePassword: { windowMs: 15 * 60 * 1000, limit: 120 },
       adminLogin: { windowMs: 15 * 60 * 1000, limit: 8 },
-      captchaAuthorization: { windowMs: 10 * 60 * 1000, limit: 10 },
+      captchaAuthorization: { windowMs: 10 * 60 * 1000, limit: 120 },
       boardCreate: { windowMs: 60 * 60 * 1000, limit: 10 },
       apiMutation: { windowMs: 60 * 1000, limit: 20 },
-      expensiveRead: { windowMs: 60 * 1000, limit: 30 },
+      expensiveRead: { windowMs: 60 * 1000, limit: 180 },
       editorPreview: { windowMs: 60 * 1000, limit: 180 }
     }
   },
   anonymousName: 'Anonymous',
   site: {
     title: 'ChikoChan',
+    pageDirectory: 'page',
     description:
     'Welcome to ChikoChan!\n\n' +
     'This little imageboard is a place to share whatever is on your mind — cute pictures, random thoughts, memes, art, games, hobbies, and more.\n\n' +
@@ -122,7 +119,6 @@ const DEFAULTS = {
     userDeletion: true,
     reports: true,
     tripcodes: true,
-    posterIds: false,
     spoilerImages: true,
     rejectDuplicateImages: false,
     search: true,
@@ -172,19 +168,7 @@ const DEFAULTS = {
     quarantineRetentionHours: 24,
     maxRevisionsPerPost: 20
   },
-  antiAbuse: {
-    nativeCaptcha: {
-      enabled: true
-    },
-    turnstile: {
-      enabled: false,
-      siteKey: '',
-      secretKey: '',
-      timeoutMs: 5000,
-      failureMode: 'closed',
-      allowedHostnames: []
-    }
-  },
+  antiAbuse: { nativeCaptcha: { enabled: false } },
   maintenance: {
     enabled: true,
     startupDelayMs: 30 * 1000,
@@ -259,14 +243,13 @@ function bundledMediaBinary(packageName, pick) {
   try {
     const exported = require(packageName);
     const resolved = pick ? exported && exported.path : exported;
-    return typeof resolved === 'string' && resolved ? resolved : '';
+    return typeof resolved === 'string' && resolved && fs.existsSync(resolved) ? resolved : '';
   } catch {
     return '';
   }
 }
 
-function loadPages(rootDir) {
-  const pagesDir = path.join(rootDir, 'page');
+function loadPages(pagesDir) {
   const pages = {};
   const filenames = new Set(['about.txt', 'contact.txt', 'news.txt', 'rule.txt', ...(fs.existsSync(pagesDir) ? fs.readdirSync(pagesDir) : [])]);
   for (const filename of [...filenames].sort()) {
@@ -365,8 +348,7 @@ function loadConfig(overrides = {}) {
   }
 
   config.rootDir = ROOT_DIR;
-  config.site.pages = { ...(config.site.pages || {}), ...loadPages(config.rootDir) };
-  if (!Number.isInteger(config.privacy.ipRetentionDays) || config.privacy.ipRetentionDays < 0 || config.privacy.ipRetentionDays > 36500) throw new Error('privacy.ipRetentionDays must be 0 (forever) or 1–36500.');
+  config.site.pages = { ...(config.site.pages || {}), ...loadPages(path.resolve(config.rootDir, config.site.pageDirectory)) };
   config.dataDir = path.resolve(ROOT_DIR, config.dataDir);
   config.dataFile = path.join(config.dataDir, 'posts.json');
   config.uploadDir = path.join(config.dataDir, 'src');
@@ -494,8 +476,8 @@ function loadConfig(overrides = {}) {
     }
   }
   if (!isPlainObject(config.lifecycle)) throw new Error('lifecycle must be an object.');
-  if (!isPlainObject(config.antiAbuse) || !isPlainObject(config.antiAbuse.turnstile)) {
-    throw new Error('antiAbuse.turnstile must be an object.');
+  if (!isPlainObject(config.antiAbuse)) {
+    throw new Error('antiAbuse must be an object.');
   }
   if (!isPlainObject(config.antiAbuse.nativeCaptcha) || typeof config.antiAbuse.nativeCaptcha.enabled !== 'boolean') {
     throw new Error('antiAbuse.nativeCaptcha.enabled must be true or false.');
@@ -518,12 +500,6 @@ function loadConfig(overrides = {}) {
     throw new Error('staffMfa must contain a boolean enabled flag, a bounded issuer, and an encrypted database key.');
   }
   if (config.staffMfa.enabled) parseEncryptionKey(config.staffMfa.encryptionKey);
-  if (!isPlainObject(config.privacy)
-    || typeof config.privacy.abuseFingerprintSecret !== 'string'
-    || config.privacy.abuseFingerprintSecret.length > 500
-    || config.privacy.abuseFingerprintSecret.includes('\0')) {
-    throw new Error('privacy.abuseFingerprintSecret must be a bounded string.');
-  }
   if (!isPlainObject(config.postingAuthorization)
     || typeof config.postingAuthorization.enabled !== 'boolean'
     || !Number.isInteger(config.postingAuthorization.ttlMs)
@@ -598,29 +574,11 @@ function loadConfig(overrides = {}) {
     }
   }
 
-  const turnstile = config.antiAbuse.turnstile;
-  if (typeof turnstile.enabled !== 'boolean') {
-    throw new Error('antiAbuse.turnstile.enabled must be true or false.');
+  if (config.antiAbuse.turnstile?.enabled || config.postingAuthorization.enabled || config.deployment.isProduction) {
+    config.antiAbuse.nativeCaptcha.enabled = true;
   }
-  if (!['closed', 'open'].includes(turnstile.failureMode)) {
-    throw new Error('antiAbuse.turnstile.failureMode must be "closed" or "open".');
-  }
-  if (!Number.isInteger(turnstile.timeoutMs) || turnstile.timeoutMs < 500 || turnstile.timeoutMs > 15000) {
-    throw new Error('antiAbuse.turnstile.timeoutMs must be an integer between 500 and 15000.');
-  }
-  if (!Array.isArray(turnstile.allowedHostnames) || turnstile.allowedHostnames.length > 20
-    || turnstile.allowedHostnames.some(hostname => !/^(?:localhost|(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*)$/i.test(String(hostname || '')))) {
-    throw new Error('antiAbuse.turnstile.allowedHostnames must contain at most 20 valid hostnames.');
-  }
-  turnstile.allowedHostnames = [...new Set(turnstile.allowedHostnames.map(hostname => String(hostname).toLowerCase()))];
-  for (const key of ['siteKey', 'secretKey']) {
-    if (typeof turnstile[key] !== 'string' || turnstile[key].length > 500 || turnstile[key].includes('\0')) {
-      throw new Error(`antiAbuse.turnstile.${key} must be a string no longer than 500 characters.`);
-    }
-  }
-  if (turnstile.enabled && (!turnstile.siteKey.trim() || !turnstile.secretKey.trim())) {
-    throw new Error('Enabled Turnstile requires antiAbuse.turnstile.siteKey and antiAbuse.turnstile.secretKey.');
-  }
+  delete config.antiAbuse.turnstile;
+  delete config.privacy;
 
   if (config.deployment.isProduction) {
     if (config.deployment.multiInstance && config.mediaStorage.backend !== 'object') {
@@ -635,14 +593,8 @@ function loadConfig(overrides = {}) {
     if (config.rateLimit.backend === 'memory') {
       throw new Error('Production requires rateLimit.backend=mongodb or redis; memory limits are process-local.');
     }
-    if (config.privacy.abuseFingerprintSecret.length < 32) {
-      throw new Error('Production requires privacy.abuseFingerprintSecret with at least 32 characters.');
-    }
     if (!config.postingAuthorization.enabled) {
       throw new Error('Production anonymous posting requires postingAuthorization.enabled=true.');
-    }
-    if (!turnstile.enabled || turnstile.failureMode !== 'closed') {
-      throw new Error('Production posting authorization requires Turnstile enabled in closed failure mode.');
     }
     if (!config.media.stripMetadata || !config.media.stripMetadataRequired) {
       throw new Error('Production requires metadata stripping in required mode.');

@@ -18,13 +18,9 @@ async function main() {
   const app = createApp({
     storage: 'json', dataDir: directory, keyFile: path.join(directory, 'test-key'),
     adminPassword: 'browser-admin-password', adminSessionSecret: 'browser-admin-session-secret',
-    rateLimit: { policies: { captchaAuthorization: { windowMs: 600000, limit: 100 } } },
+    rateLimit: { operations: { captchaAuthorization: { windowMs: 600000, limit: 100 } } },
     limits: { postRateLimit: 100, reportRateLimit: 100 },
-    postingAuthorization: { enabled: true, secret: 'browser-test-authorization-secret-123456789' },
-    antiAbuse: { turnstile: { enabled: true, siteKey: 'test-site-key', secretKey: 'test-secret' } },
-    turnstileFetch: async (_url, options) => ({ ok: true, text: async () => JSON.stringify({
-      success: options.body.get('response') === 'browser-test-token', action: 'post', hostname: 'localhost'
-    }) })
+    postingAuthorization: { enabled: true, secret: 'browser-test-authorization-secret-123456789' }
   });
   const bannerFilename = `browser-banner-${process.pid}.png`;
   const bannerPath = path.join(app.locals.chikochan.config.rootDir, 'Banner', bannerFilename);
@@ -41,14 +37,6 @@ async function main() {
     browser = await chromium.launch({ headless: true, executablePath: process.argv[3] || undefined });
     for (const javaScriptEnabled of [false, true]) {
       const context = await browser.newContext({ javaScriptEnabled, viewport: { width: 1280, height: 900 } });
-      // Provider integration is mocked; the real client script, fetch authorization,
-      // server validation, multipart form, redirects, and persistence all run unchanged.
-      await context.route('https://challenges.cloudflare.com/**', route => route.fulfill({
-        contentType: 'application/javascript', body: `window.turnstile={render:function(el){
-          var input=document.createElement('input');input.type='hidden';
-          input.name='cf-turnstile-response';input.value='browser-test-token';el.appendChild(input);return 'test';
-        },reset:function(){}};`
-      }));
       const page = await context.newPage();
       page.setDefaultTimeout(15000);
       const scripts = [];
@@ -81,7 +69,7 @@ async function main() {
         const answer = app.locals.chikochan.nativeCaptcha.parse(token).answer;
         await form.locator('[name="nativeAnswer"]').fill(answer);
       }
-      if (!javaScriptEnabled) await solve(page.locator('#post-form'));
+      await solve(page.locator('#post-form'));
       await Promise.all([
         page.waitForURL(/\/chiko\/thread\/\d+/),
         page.locator('#post-form [type="submit"]').click()
@@ -96,7 +84,7 @@ async function main() {
       assert.equal(app.locals.chikochan.service.getData().threads.length, count);
       await page.locator('.reply-form textarea').fill(`>>${threadId}\nBrowser reply ` + 'long comment '.repeat(60));
       await page.locator('.reply-form [name="pwd"]').fill('browser-password');
-      if (!javaScriptEnabled) await solve(page.locator('.reply-form'));
+      await solve(page.locator('.reply-form'));
       await Promise.all([page.waitForNavigation(), page.locator('.reply-form [type="submit"]').click()]);
       const thread = app.locals.chikochan.service.getData().threads.find(item => item.id === threadId);
       assert.equal(thread.replies.length, 1);
@@ -108,7 +96,7 @@ async function main() {
             '-threads', '1', '-f', 'image2pipe', '-vcodec', 'png', 'pipe:1']);
         await page.locator('.reply-form textarea').fill(`>>${threadId}\n${size} attachment`);
         await page.locator('.reply-form [name="upfile"]').setInputFiles({ name: `${size}.png`, mimeType: 'image/png', buffer: picture });
-        if (!javaScriptEnabled) await solve(page.locator('.reply-form'));
+        await solve(page.locator('.reply-form'));
         await Promise.all([page.waitForNavigation(), page.locator('.reply-form [type="submit"]').click()]);
       }
       assert.equal(await page.locator(`#p${threadId} .backlink`).count(), 3);
@@ -245,7 +233,7 @@ async function main() {
       if (!javaScriptEnabled) assert.deepEqual(scripts, []);
       assert.deepEqual(errors, []);
       await context.close();
-      console.log(`PASS JavaScript ${javaScriptEnabled ? 'ON (Turnstile provider mocked)' : 'OFF'}: browse, image/thread, reply, PRG/refresh, report, delete, validation, desktop/mobile`);
+      console.log(`PASS JavaScript ${javaScriptEnabled ? 'ON' : 'OFF'}: browse, image/thread, reply, PRG/refresh, report, delete, validation, desktop/mobile`);
     }
     console.log(`Screenshots: ${directory}`);
   } finally {

@@ -1,6 +1,8 @@
 (function () {
   'use strict';
 
+  document.documentElement.classList.add('js-enabled');
+
   var PASSWORD_KEY = 'chikochan-post-password';
   var HIDDEN_KEY = 'chikochan-hidden-posts';
   var THEME_KEY = 'chikochan-theme';
@@ -108,30 +110,6 @@
         if (!input.value) input.value = name;
       });
     } catch (_) {}
-  }
-
-  function initializeIpFields() {
-    document.querySelectorAll('.admin-post-summary .staff-ip[data-post-id]').forEach(function (button) {
-      var id = button.dataset.postId;
-      var loading = false;
-      async function reveal() {
-        if (loading) return;
-        loading = true;
-        try {
-          var reply = await fetch('/admin/post-ip/' + id, { cache: 'no-store', redirect: 'error' });
-          if (!reply.ok) throw new Error();
-          var result = await reply.json();
-          if (button.matches(':hover') || document.activeElement === button) button.textContent = result.ip || 'IP: expired or unavailable';
-        } catch (_) { button.textContent = 'IP: unavailable'; }
-        loading = false;
-      }
-      button.addEventListener('mouseenter', reveal);
-      button.addEventListener('focus', reveal);
-      button.addEventListener('click', reveal);
-      function conceal() { button.textContent = 'IP: •••'; }
-      button.addEventListener('mouseleave', conceal);
-      button.addEventListener('blur', conceal);
-    });
   }
 
   function randomPassword() {
@@ -260,114 +238,6 @@
   function initializeHiddenPosts() {
     hiddenIds().forEach(function (postId) { setPostHidden(postId, true, false); });
   }
-
-  function initializeCatalogFilter() {
-    var input = document.getElementById('catalog-filter');
-    if (!input) return;
-    input.addEventListener('input', function () {
-      var query = input.value.trim().toLowerCase();
-      document.querySelectorAll('.catalog-card').forEach(function (card) {
-        card.hidden = Boolean(query) && !card.dataset.catalogText.includes(query);
-      });
-    });
-  }
-
-  function renderTurnstile(form) {
-    var container = form && form.querySelector('[data-turnstile-widget]');
-    if (!container || container.dataset.widgetId) return container;
-    var status = container.querySelector('.captcha-status');
-    if (!window.turnstile || typeof window.turnstile.render !== 'function') {
-      if (status) status.textContent = 'Human verification could not load. Check your connection and refresh.';
-      return container;
-    }
-    try {
-      if (status) status.textContent = 'Loading human verification…';
-      var widgetId = window.turnstile.render(container, {
-        sitekey: container.dataset.sitekey,
-        action: container.dataset.action || 'post',
-        theme: 'auto',
-        appearance: 'interaction-only',
-        'response-field': true,
-        'response-field-name': 'cf-turnstile-response'
-      });
-      container.dataset.widgetId = String(widgetId);
-      if (status && status.isConnected) status.remove();
-    } catch {
-      container.textContent = 'Human verification could not load. Refresh and try again.';
-    }
-    return container;
-  }
-
-  function initializeTurnstile() {
-    document.querySelectorAll('form[data-turnstile-form]').forEach(function (form) {
-      form.addEventListener('focusin', function () { renderTurnstile(form); }, { once: true });
-      form.addEventListener('pointerdown', function () { renderTurnstile(form); }, { once: true });
-      var details = form.closest('details');
-      if (details) {
-        details.addEventListener('toggle', function () {
-          if (details.open) renderTurnstile(form);
-        });
-      }
-    });
-  }
-
-  function authorizationStatus(form) {
-    var container = form.querySelector('[data-turnstile-widget]');
-    if (!container) return null;
-    var status = container.querySelector('.captcha-status');
-    if (!status) {
-      status = document.createElement('span');
-      status.className = 'captcha-status';
-      container.appendChild(status);
-    }
-    return status;
-  }
-
-  async function authorizePosting(form, submitter) {
-    var status = authorizationStatus(form);
-    var captchaToken = form.querySelector('input[name="cf-turnstile-response"]');
-    if (form.hasAttribute('data-turnstile-form') && (!captchaToken || !captchaToken.value)) {
-      var captcha = renderTurnstile(form);
-      if (status) status.textContent = 'Complete human verification before posting.';
-      if (captcha) captcha.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-      return;
-    }
-
-    if (submitter) submitter.disabled = true;
-    if (status) status.textContent = 'Authorizing this post…';
-    try {
-      var body = new URLSearchParams({
-        board: form.dataset.boardUri || '',
-        threadId: form.dataset.threadId || '0',
-        'cf-turnstile-response': captchaToken ? captchaToken.value : ''
-      });
-      var response = await window.fetch('/posting-authorizations', {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: {
-          Accept: 'application/json',
-          'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
-          'X-Requested-With': 'XMLHttpRequest'
-        },
-        body: body.toString(),
-        redirect: 'error'
-      });
-      var result = await response.json().catch(function () { return {}; });
-      if (!response.ok || result.ok !== true) throw new Error(result.error || 'Posting authorization failed.');
-      form.dataset.postingAuthorized = '1';
-      if (status) status.textContent = 'Authorized. Uploading…';
-      if (submitter && submitter.isConnected) form.requestSubmit(submitter);
-      else form.requestSubmit();
-    } catch (error) {
-      if (submitter) submitter.disabled = false;
-      if (status) status.textContent = error.message || 'Posting authorization failed. Refresh and try again.';
-      if (window.turnstile && captchaToken) {
-        var widget = form.querySelector('[data-turnstile-widget]');
-        if (widget && widget.dataset.widgetId) window.turnstile.reset(widget.dataset.widgetId);
-      }
-    }
-  }
-
 
   function updateExpandedMedia(attachments) {
     if (!attachments) return;
@@ -525,31 +395,8 @@
         return;
       }
     }
-    // Native image verification submits the original multipart form directly.
-    if (event.target.querySelector('input[name="nativeAnswer"]')?.value.trim()) return;
-    if (event.target.matches('form[data-posting-authorization]')
-      && event.target.dataset.postingAuthorized !== '1') {
-      event.preventDefault();
-      void authorizePosting(event.target, event.submitter);
-      return;
-    }
-    if (event.target.dataset.postingAuthorized === '1') {
-      delete event.target.dataset.postingAuthorized;
-    } else if (event.target.matches('form[data-turnstile-form]')) {
-      var token = event.target.querySelector('input[name="cf-turnstile-response"]');
-      if (!token || !token.value) {
-        event.preventDefault();
-        var captcha = renderTurnstile(event.target);
-        if (captcha) {
-          var message = captcha.querySelector('.captcha-status');
-          if (message) message.textContent = 'Complete human verification before posting.';
-          captcha.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-        }
-        return;
-      }
-    }
     var button = event.target.querySelector('[type="submit"]');
-    if (button) {
+    if (button && !button.name) {
       button.disabled = true;
       button.dataset.originalValue = button.value || button.textContent;
       if ('value' in button) button.value = 'Posting…';
@@ -586,13 +433,10 @@
     initializeNames();
     initializeTheme();
     if (document.documentElement.hasAttribute('data-theme-preview')) { document.dispatchEvent(new CustomEvent('chikochan:ready')); return; }
-    void initializeIpFields();
     await loadPreferences();
     initializeTheme();
     initializePasswords();
     initializeHiddenPosts();
-    initializeCatalogFilter();
-    initializeTurnstile();
     highlightHash();
     var params = new URLSearchParams(window.location.search);
     var quoteId = params.get('quote') || params.get('q');

@@ -22,7 +22,6 @@ async function main() {
       replyCreate: { windowMs: 60000, limit: 1000 },
       mediaPost: { windowMs: 60000, limit: 1000 }
     } },
-    antiAbuse: { turnstile: { enabled: false } },
     postingAuthorization: { enabled: false }
   });
   const server = await new Promise((resolve, reject) => {
